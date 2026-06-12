@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "A11y Companion — Accessibility Toolbar",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A personal accessibility toolbar for any website. Dyslexia font, color modes, screen reader, voice commands, keyboard navigation, and more.",
   "permissions": ["storage", "activeTab"],
   "host_permissions": ["<all_urls>"],

@@ -590,7 +590,7 @@
       this.el.style.cssText =
         'all: initial; position: fixed; left: 0; right: 0; top: -9999px;' +
         'height: ' + h + 'px; pointer-events: none; z-index: 2147483646;' +
-        'box-shadow: 0 0 0 200000px rgba(15, 23, 42, 0.42);' +
+        'box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.42);' +
         'border-top: 1px solid rgba(255,255,255,0.35); border-bottom: 1px solid rgba(255,255,255,0.35);';
       this.moveBound = (e) => {
         if (!this.el) return;
@@ -831,7 +831,10 @@
     },
     start() {
       this.init();
-      if (!this.rec || this.listening) return;
+      if (!this.rec) return;
+      // Pick up a changed recognition language on the next (re)start.
+      this.rec.lang = settings.voiceLang || 'en-US';
+      if (this.listening) return;
       try { this.rec.start(); this.listening = true; } catch {}
     },
     stop() {
@@ -1073,7 +1076,8 @@
         .sheet-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
         .sheet-head strong { flex: 1; font-size: 13px; }
         .sheet-body { font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
-        .hidden { display: none; }
+        /* !important so it also beats button.chip's higher specificity */
+        .hidden { display: none !important; }
       </style>
       <div class="panel" id="panel" role="toolbar" aria-label="A11y Companion">
         <span class="brand" title="A11y Companion">♿</span>
@@ -1323,7 +1327,12 @@
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
   // Patch history APIs to detect SPA navigation
+  let lastHref = location.href;
   const fireUrlChange = () => {
+    // Many sites call replaceState for scroll/analytics state without
+    // navigating — only react when the URL really changed.
+    if (location.href === lastHref) return;
+    lastHref = location.href;
     reader.stop(); // the content under the reading queue is changing
     setTimeout(() => {
       if (settings.readingMode) applyReadingMode();
