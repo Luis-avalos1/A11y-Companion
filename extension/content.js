@@ -7,35 +7,16 @@
   if (window.__a11yCompanionLoaded) return;
   window.__a11yCompanionLoaded = true;
 
-  const STORAGE_KEYS = [
-    'toolbarVisible',
-    'fontSize',
-    'letterSpacing',
-    'lineHeight',
-    'dyslexiaFont',
-    'colorMode',
-    'screenReader',
-    'voiceInput',
-    'keyboardNav',
-    'readingMode',
-    'voiceLang',
-  ];
+  // Defaults and keys come from shared.js, which the manifest loads first.
+  const DEFAULTS = A11Y_DEFAULTS;
+  const STORAGE_KEYS = A11Y_KEYS;
+  // Per-site entry for this host: { disabled?, scoped?, overrides? }.
+  const SITE_KEY = a11ySiteKey(location.hostname);
 
-  const DEFAULTS = {
-    toolbarVisible: true,
-    fontSize: 100,
-    letterSpacing: 0,
-    lineHeight: 1.5,
-    dyslexiaFont: false,
-    colorMode: 'default',
-    screenReader: false,
-    voiceInput: false,
-    keyboardNav: false,
-    readingMode: false,
-    voiceLang: 'en-US',
-  };
-
-  let settings = { ...DEFAULTS };
+  let settings = { ...DEFAULTS }; // effective: defaults + global + site overrides
+  let globalSettings = {};        // raw global values from storage
+  let siteEntry = null;
+  let siteDisabled = false;
   let host, shadow;
   let orphaned = false;
 
@@ -59,17 +40,35 @@
   async function loadSettings() {
     if (!extValid()) return;
     try {
-      const stored = await chrome.storage.sync.get(STORAGE_KEYS);
-      settings = { ...DEFAULTS, ...stored };
+      const stored = await chrome.storage.sync.get([...STORAGE_KEYS, SITE_KEY]);
+      siteEntry = stored[SITE_KEY] || null;
+      delete stored[SITE_KEY];
+      globalSettings = stored;
+      computeEffective();
     } catch {
       handleOrphan();
     }
+  }
+  function computeEffective() {
+    settings = {
+      ...DEFAULTS,
+      ...globalSettings,
+      ...(siteEntry && siteEntry.scoped ? siteEntry.overrides : null),
+    };
   }
   function saveSetting(key, value) {
     settings[key] = value;
     if (!extValid()) return handleOrphan();
     try {
-      chrome.storage.sync.set({ [key]: value });
+      // Site-scoped mode routes everything except toolbar visibility (a
+      // global UX choice) into this host's override entry.
+      if (siteEntry?.scoped && key !== 'toolbarVisible') {
+        siteEntry.overrides = { ...siteEntry.overrides, [key]: value };
+        chrome.storage.sync.set({ [SITE_KEY]: siteEntry });
+      } else {
+        globalSettings[key] = value;
+        chrome.storage.sync.set({ [key]: value });
+      }
     } catch {
       handleOrphan();
     }
@@ -346,13 +345,19 @@
     leaveBound: null,
     lastEl: null,
     hoverTimer: null,
-    speak(text) {
+    speak(text, opts = {}) {
       if (!text || !this.synth) return;
       this.synth.cancel();
       const u = new SpeechSynthesisUtterance(String(text).slice(0, 32000));
-      u.lang = document.documentElement.lang || 'en-US';
-      u.rate = 1;
+      u.lang = opts.lang || document.documentElement.lang || 'en-US';
+      u.rate = settings.speechRate || 1;
+      const v = this.pickVoice();
+      if (v) u.voice = v;
       this.synth.speak(u);
+    },
+    pickVoice() {
+      if (!settings.speechVoice || !this.synth) return null;
+      return this.synth.getVoices().find((v) => v.name === settings.speechVoice) || null;
     },
     readEl(el) {
       this.speak(readableText(el));
@@ -381,7 +386,7 @@
       document.documentElement.addEventListener('mouseleave', this.leaveBound);
       window.addEventListener('blur', this.leaveBound);
       document.body?.classList.add('__a11y-hover-read');
-      this.speak('Screen reader on. Point at text to hear it.');
+      this.speak('Screen reader on. Point at text to hear it.', { lang: 'en-US' });
     },
     disableHover() {
       if (this.hoverBound) document.removeEventListener('mouseover', this.hoverBound, true);
@@ -405,7 +410,7 @@
         this.lastEl = el;
         const text = readableText(el);
         if (text) this.speak(text);
-      }, 400);
+      }, settings.hoverDelay || 400);
     },
     stop() {
       this.synth?.cancel();
@@ -473,15 +478,20 @@
     },
   };
 
-  // Inject keyboard-focus outline once
-  (function injectFocusStyle() {
+  // Helper classes (focus ring, hover-read cursor). Inert without the
+  // classes; removed again when the extension is turned off for the site.
+  const HELPER_STYLE_ID = '__a11y-companion-helper-style';
+  document.getElementById(HELPER_STYLE_ID)?.remove(); // stale copy from an orphaned script
+  function ensureHelperStyle() {
+    if (document.getElementById(HELPER_STYLE_ID)) return;
     const s = document.createElement('style');
+    s.id = HELPER_STYLE_ID;
     s.textContent = `
       .__a11y-focused { outline: 3px solid #ff3860 !important; outline-offset: 2px !important; }
       .__a11y-hover-read *:hover { cursor: help !important; }
     `;
     (document.head || document.documentElement).appendChild(s);
-  })();
+  }
 
   // ─── Voice commands ─────────────────────────────────────────────────
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -509,7 +519,8 @@
       };
       this.rec.onend = () => {
         this.listening = false;
-        if (settings.voiceInput) {
+        // Don't auto-restart the mic on a site the user just turned us off on.
+        if (settings.voiceInput && !siteDisabled) {
           try { this.rec.start(); this.listening = true; } catch {}
         }
       };
@@ -578,7 +589,7 @@
         best.scrollIntoView({ behavior: 'smooth', block: 'center' });
         best.click();
       } else {
-        screenReader.speak(`Could not find ${query}`);
+        screenReader.speak(`Could not find ${query}`, { lang: 'en-US' });
       }
     },
   };
@@ -600,7 +611,7 @@
     },
     toggle(key) {
       saveSetting(key, !settings[key]);
-      onToggle(key);
+      syncFeatureState();
       applyAllStyles();
       updateUI();
     },
@@ -610,20 +621,23 @@
     },
     reset() {
       Object.entries(DEFAULTS).forEach(([k, v]) => saveSetting(k, v));
-      kbd.disable();
-      voice.stop();
-      screenReader.disableHover();
+      syncFeatureState();
       screenReader.stop();
       applyAllStyles();
       updateUI();
     },
   };
 
-  function onToggle(key) {
-    if (key === 'keyboardNav') settings.keyboardNav ? kbd.init() : kbd.disable();
-    if (key === 'voiceInput') settings.voiceInput ? voice.start() : voice.stop();
-    if (key === 'screenReader' && settings.screenReader) screenReader.enableHover();
-    if (key === 'screenReader' && !settings.screenReader) {
+  // Bring long-lived features in line with the effective settings. Changes
+  // arrive from our own toolbar, the popup, the options page, keyboard
+  // commands, and other synced devices — this is the single reconciler.
+  function syncFeatureState() {
+    if (settings.keyboardNav && !kbd.bound) kbd.init();
+    if (!settings.keyboardNav && kbd.bound) kbd.disable();
+    if (settings.voiceInput) voice.start();
+    else voice.stop();
+    if (settings.screenReader && !screenReader.hoverBound) screenReader.enableHover();
+    if (!settings.screenReader && screenReader.hoverBound) {
       screenReader.disableHover();
       screenReader.stop();
     }
@@ -631,6 +645,7 @@
 
   // ─── Toolbar UI (Shadow DOM, isolated from page CSS) ────────────────
   function buildToolbar() {
+    ensureHelperStyle();
     if (host) return;
     host = document.createElement('div');
     host.id = '__a11y-companion-host';
@@ -825,27 +840,64 @@
   // ─── Init & live sync ───────────────────────────────────────────────
   async function init() {
     await loadSettings();
+    siteDisabled = !!(siteEntry && siteEntry.disabled);
+    if (siteDisabled) return; // the storage listener below handles re-enabling
     buildToolbar();
     applyAllStyles();
     updateUI();
-    if (settings.keyboardNav) kbd.init();
-    if (settings.voiceInput) voice.start();
-    if (settings.screenReader) screenReader.enableHover();
+    syncFeatureState();
+  }
+
+  // Tear everything out of the page when the user turns the extension off
+  // for this site, or rebuild after a re-enable.
+  function applyEnabledState() {
+    const wantDisabled = !!(siteEntry && siteEntry.disabled);
+    if (wantDisabled === siteDisabled) return;
+    siteDisabled = wantDisabled;
+    if (wantDisabled) {
+      kbd.disable();
+      voice.stop();
+      screenReader.disableHover();
+      screenReader.stop();
+      document.getElementById(STYLE_ID)?.remove();
+      document.getElementById(HELPER_STYLE_ID)?.remove();
+      document
+        .querySelectorAll('.__a11y-hc-surface, .__a11y-reading-dim, .__a11y-reading-main, .__a11y-focused')
+        .forEach((el) =>
+          el.classList.remove('__a11y-hc-surface', '__a11y-reading-dim', '__a11y-reading-main', '__a11y-focused')
+        );
+      host?.remove();
+      host = null;
+      shadow = null;
+    } else {
+      buildToolbar();
+      applyAllStyles();
+      updateUI();
+      syncFeatureState();
+    }
   }
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'sync') return;
     let touched = false;
-    for (const k of Object.keys(changes)) {
-      if (k in settings) {
-        settings[k] = changes[k].newValue;
+    for (const [k, c] of Object.entries(changes)) {
+      if (k === SITE_KEY) {
+        siteEntry = c.newValue || null;
+        touched = true;
+      } else if (STORAGE_KEYS.includes(k)) {
+        if (c.newValue === undefined) delete globalSettings[k];
+        else globalSettings[k] = c.newValue;
         touched = true;
       }
     }
-    if (touched) {
-      applyAllStyles();
-      updateUI();
-    }
+    if (!touched) return;
+    computeEffective();
+    applyEnabledState();
+    if (siteDisabled) return;
+    buildToolbar(); // first enable on a tab that loaded while disabled
+    applyAllStyles();
+    updateUI();
+    syncFeatureState();
   });
 
   // SPA support:
@@ -854,6 +906,7 @@
   // 3. Re-apply on URL change (history pushState/replaceState)
   let readingDebounce, hcDebounce;
   const observer = new MutationObserver(() => {
+    if (siteDisabled) return;
     if (host && !document.documentElement.contains(host)) {
       document.documentElement.appendChild(host);
     }

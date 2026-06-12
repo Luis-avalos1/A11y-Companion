@@ -4,21 +4,35 @@
   <meta charset="utf-8">
   <title>A11y Companion</title>
   <style>
-    body { font-family: -apple-system, system-ui, sans-serif; width: 260px; margin: 0; padding: 14px; color: #111; }
+    body { font-family: -apple-system, system-ui, sans-serif; width: 280px; margin: 0; padding: 14px; color: #111; }
     h1 { font-size: 15px; margin: 0 0 10px; }
     button { width: 100%; padding: 10px; margin: 4px 0; border: none; border-radius: 8px; background: #f1f5f9; cursor: pointer; font-size: 13px; }
     button.primary { background: #2563eb; color: #fff; }
     button:hover { filter: brightness(0.96); }
+    button:focus-visible, input:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
     p { font-size: 12px; color: #475569; margin: 8px 0 0; }
     kbd { background: #e2e8f0; padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+    #site { margin: 10px 0 6px; padding: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }
+    #site h2 { font-size: 12px; margin: 0 0 6px; color: #334155; word-break: break-all; }
+    #site label { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 0; cursor: pointer; }
+    #site .hint { font-size: 11px; margin: 4px 0 0; }
   </style>
 </head>
 <body>
   <h1>A11y Companion</h1>
   <button class="primary" id="toggle">Show / hide toolbar</button>
+
+  <section id="site" hidden>
+    <h2 id="siteName"></h2>
+    <label><input type="checkbox" id="siteOff"> Turn off on this site</label>
+    <label><input type="checkbox" id="siteScoped"> Site-specific settings</label>
+    <p class="hint">Site-specific settings start as a copy of your current setup, then only change on this site.</p>
+  </section>
+
+  <button id="options">All settings…</button>
   <button id="reset">Reset all settings</button>
-  <p>Shortcut: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd></p>
-  <p>The toolbar appears along the bottom of every page. Settings sync across all your sites.</p>
+  <p>Shortcut: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> toggles the toolbar.</p>
+  <script src="shared.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

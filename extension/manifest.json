@@ -9,13 +9,17 @@
     "default_popup": "popup.html",
     "default_title": "A11y Companion"
   },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["shared.js", "content.js"],
       "run_at": "document_idle",
       "all_frames": false
     }
@@ -30,6 +34,14 @@
     "toggle-toolbar": {
       "suggested_key": { "default": "Alt+Shift+A" },
       "description": "Toggle the accessibility toolbar"
+    },
+    "toggle-screen-reader": {
+      "suggested_key": { "default": "Alt+Shift+S" },
+      "description": "Toggle the hover-to-read screen reader"
+    },
+    "toggle-reading-mode": {
+      "suggested_key": { "default": "Alt+Shift+R" },
+      "description": "Toggle reading mode"
     }
   },
   "icons": {
