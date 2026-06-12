@@ -3,7 +3,7 @@
   "name": "A11y Companion — Accessibility Toolbar",
   "version": "0.1.0",
   "description": "A personal accessibility toolbar for any website. Dyslexia font, color modes, screen reader, voice commands, keyboard navigation, and more.",
-  "permissions": ["storage", "activeTab", "scripting"],
+  "permissions": ["storage", "activeTab"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html",

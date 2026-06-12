@@ -21,8 +21,6 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.commands.onCommand.addListener(async (command) => {
   if (command !== 'toggle-toolbar') return;
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id) return;
   const { toolbarVisible } = await chrome.storage.sync.get('toolbarVisible');
   await chrome.storage.sync.set({ toolbarVisible: !toolbarVisible });
 });

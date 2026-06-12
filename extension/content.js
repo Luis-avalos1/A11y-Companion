@@ -18,6 +18,7 @@
     'voiceInput',
     'keyboardNav',
     'readingMode',
+    'voiceLang',
   ];
 
   const DEFAULTS = {
@@ -31,6 +32,7 @@
     voiceInput: false,
     keyboardNav: false,
     readingMode: false,
+    voiceLang: 'en-US',
   };
 
   let settings = { ...DEFAULTS };
@@ -75,6 +77,15 @@
 
   // ─── Style application (uses html element + !important to beat sites) ──
   const STYLE_ID = '__a11y-companion-style';
+  // A stale style element can survive an extension reload (the old content
+  // script is orphaned, but its DOM edits remain). Remove it before measuring
+  // the page, so the base font size below is never our own override.
+  document.getElementById(STYLE_ID)?.remove();
+  // The site's own root font size, captured before we ever restyle. Scaling
+  // multiplies this value instead of overwriting it, so sites using the
+  // `html { font-size: 62.5% }` rem pattern keep their layout.
+  const baseFontPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+
   function applyAllStyles() {
     let styleEl = document.getElementById(STYLE_ID);
     if (!styleEl) {
@@ -85,7 +96,7 @@
 
     const regUrl = extValid() ? chrome.runtime.getURL('fonts/OpenDyslexic-Regular.woff2') : '';
     const boldUrl = extValid() ? chrome.runtime.getURL('fonts/OpenDyslexic-Bold.woff2') : '';
-    const fontFaces = `
+    const fontFaces = settings.dyslexiaFont ? `
       @font-face {
         font-family: 'OpenDyslexic';
         src: url('${regUrl}') format('woff2');
@@ -96,15 +107,25 @@
         src: url('${boldUrl}') format('woff2');
         font-weight: bold; font-style: normal; font-display: swap;
       }
-    `;
+    ` : '';
 
-    const fontSize = `html { font-size: ${settings.fontSize}% !important; }`;
+    // Nothing is emitted at default values — an idle extension must never
+    // restyle the page.
+    const fontSize = settings.fontSize !== DEFAULTS.fontSize
+      ? `html { font-size: ${((baseFontPx * settings.fontSize) / 100).toFixed(2)}px !important; }`
+      : '';
     // Apply spacing to inheritable parents only — letter-spacing and line-height
     // both inherit, so this avoids breaking icon fonts and flex layouts.
-    const spacing = `html, body, p, li, h1, h2, h3, h4, h5, h6, span, a, div, td, th, label, button, input, textarea {
-      letter-spacing: ${settings.letterSpacing}px !important;
-      line-height: ${settings.lineHeight} !important;
-    }`;
+    const spacingProps =
+      (settings.letterSpacing !== DEFAULTS.letterSpacing
+        ? `letter-spacing: ${settings.letterSpacing}px !important;`
+        : '') +
+      (settings.lineHeight !== DEFAULTS.lineHeight
+        ? ` line-height: ${settings.lineHeight} !important;`
+        : '');
+    const spacing = spacingProps.trim()
+      ? `html, body, p, li, h1, h2, h3, h4, h5, h6, span, a, div, td, th, label, button, input, textarea { ${spacingProps} }`
+      : '';
     const dyslexia = settings.dyslexiaFont
       ? `html, body, p, li, h1, h2, h3, h4, h5, h6, span, a, div, td, th, label, button, input, textarea, blockquote, figcaption {
            font-family: 'OpenDyslexic', sans-serif !important;
@@ -132,6 +153,13 @@
           background-color: transparent !important;
           color: #fff !important;
           border-color: #fff !important;
+        }
+        /* Floating UI needs a solid surface back, or menus and modals turn
+           into unreadable text stacked over the page. */
+        dialog, [aria-modal="true"], [role="dialog"], [role="menu"], [role="listbox"],
+        [role="tooltip"], [class*="modal"], [class*="dropdown"], [class*="popover"],
+        [class*="menu"], [class*="tooltip"], .__a11y-hc-surface {
+          background-color: #000 !important;
         }
         a, a * { color: #00ffff !important; }
         button:not(#__a11y-companion-host *),
@@ -171,6 +199,26 @@
     styleEl.textContent = fontFaces + fontSize + spacing + dyslexia + colorFilter + readingMode;
     ensureColorFilterSVG();
     applyReadingMode();
+    markHcSurfaces();
+  }
+
+  // Overlays (modals, dropdown portals) usually mount within a couple of
+  // levels of <body>; a computed-style pass that shallow stays cheap while
+  // catching the floating UI the CSS heuristics in high-contrast mode miss.
+  function markHcSurfaces() {
+    if (settings.colorMode !== 'high-contrast') {
+      document.querySelectorAll('.__a11y-hc-surface').forEach((el) =>
+        el.classList.remove('__a11y-hc-surface')
+      );
+      return;
+    }
+    for (const el of document.querySelectorAll('body > *, body > * > *')) {
+      if (el.id === '__a11y-companion-host' || el.id === '__a11y-color-filters') continue;
+      const pos = getComputedStyle(el).position;
+      if (pos === 'fixed' || pos === 'sticky' || pos === 'absolute') {
+        el.classList.add('__a11y-hc-surface');
+      }
+    }
   }
 
   // Reading mode: find the main content element, then walk up to <body>,
@@ -374,7 +422,14 @@
         document.querySelectorAll(
           'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
         )
-      ).filter((el) => el.offsetParent !== null && !host?.contains(el));
+      ).filter(
+        // offsetParent is null for position:fixed elements (sticky navs, chat
+        // widgets), so visibility is checked via client rects instead.
+        (el) =>
+          el.getClientRects().length > 0 &&
+          getComputedStyle(el).visibility !== 'hidden' &&
+          !host?.contains(el)
+      );
     },
     init() {
       if (this.bound) return;
@@ -392,7 +447,7 @@
     onKey(e) {
       // Don't hijack typing inside form fields
       const tag = (e.target?.tagName || '').toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) return;
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
         e.preventDefault();
       }
@@ -438,7 +493,9 @@
       this.rec = new SR();
       this.rec.continuous = true;
       this.rec.interimResults = false;
-      this.rec.lang = document.documentElement.lang || 'en-US';
+      // Recognition language is a user setting — the page's language used to
+      // drive it, which broke the (English) command set on non-English sites.
+      this.rec.lang = settings.voiceLang || 'en-US';
       this.rec.onresult = (e) => {
         const transcript = e.results[e.results.length - 1][0].transcript.trim().toLowerCase();
         this.handle(transcript);
@@ -474,7 +531,11 @@
       const clickMatch = t.match(/^(?:click|press|tap|open) (.+)$/);
       if (clickMatch) return this.clickByText(clickMatch[1]);
 
-      const cmd = (sub, fn) => t.includes(sub) && (fn(), true);
+      // Whole-word matching so e.g. "unexpected" can't trigger "next"; the
+      // shortest commands additionally require the utterance to be exactly
+      // that word, since they occur inside too many ordinary sentences.
+      const cmd = (sub, fn) => new RegExp(`\\b${sub}\\b`).test(t) && (fn(), true);
+      const exact = (word, fn) => t === word && (fn(), true);
       cmd('scroll down', () => window.scrollBy(0, 400)) ||
       cmd('scroll up', () => window.scrollBy(0, -400)) ||
       cmd('top of page', () => window.scrollTo(0, 0)) ||
@@ -493,8 +554,8 @@
       cmd('dark mode', () => actions.setColor('invert')) ||
       cmd('high contrast', () => actions.setColor('high-contrast')) ||
       cmd('default colors', () => actions.setColor('default')) ||
-      cmd('next', () => kbd.move(1)) ||
-      cmd('previous', () => kbd.move(-1));
+      exact('next', () => kbd.move(1)) ||
+      exact('previous', () => kbd.move(-1));
     },
     clickByText(query) {
       const q = query.toLowerCase().trim();
@@ -531,8 +592,10 @@
       updateUI();
     },
     spacing(delta) {
-      saveSetting('letterSpacing', Math.max(0, settings.letterSpacing + delta * 0.5));
-      saveSetting('lineHeight', Math.max(1, settings.lineHeight + delta * 0.1));
+      // Round so stepping back down lands exactly on the defaults again
+      // (1.6 - 0.1 is not 1.5 in floating point).
+      saveSetting('letterSpacing', Math.round(Math.max(0, settings.letterSpacing + delta * 0.5) * 100) / 100);
+      saveSetting('lineHeight', Math.round(Math.max(1, settings.lineHeight + delta * 0.1) * 100) / 100);
       applyAllStyles();
     },
     toggle(key) {
@@ -789,7 +852,7 @@
   // 1. Re-inject toolbar if removed by client routing
   // 2. Re-apply reading mode on DOM mutations (debounced)
   // 3. Re-apply on URL change (history pushState/replaceState)
-  let readingDebounce;
+  let readingDebounce, hcDebounce;
   const observer = new MutationObserver(() => {
     if (host && !document.documentElement.contains(host)) {
       document.documentElement.appendChild(host);
@@ -797,6 +860,10 @@
     if (settings.readingMode) {
       clearTimeout(readingDebounce);
       readingDebounce = setTimeout(applyReadingMode, 400);
+    }
+    if (settings.colorMode === 'high-contrast') {
+      clearTimeout(hcDebounce);
+      hcDebounce = setTimeout(markHcSurfaces, 400);
     }
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
