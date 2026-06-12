@@ -34,6 +34,8 @@
     try { kbd.disable(); } catch {}
     try { voice.stop(); } catch {}
     try { screenReader.disableHover(); screenReader.stop(); } catch {}
+    try { reader.stop(); } catch {}
+    try { ruler.disable(); } catch {}
   }
 
   // ─── Storage helpers ────────────────────────────────────────────────
@@ -195,10 +197,22 @@
          .__a11y-reading-main img { max-width: 100% !important; height: auto !important; }`
       : '';
 
-    styleEl.textContent = fontFaces + fontSize + spacing + dyslexia + colorFilter + readingMode;
+    // Freeze CSS animations/transitions without breaking sites that wait for
+    // animationend (near-zero duration instead of none).
+    const motion = settings.reduceMotion
+      ? `*, *::before, *::after {
+           animation-duration: 0.001s !important;
+           animation-iteration-count: 1 !important;
+           transition-duration: 0.001s !important;
+           scroll-behavior: auto !important;
+         }`
+      : '';
+
+    styleEl.textContent = fontFaces + fontSize + spacing + dyslexia + colorFilter + readingMode + motion;
     ensureColorFilterSVG();
     applyReadingMode();
     markHcSurfaces();
+    pauseAutoplayMedia();
   }
 
   // Overlays (modals, dropdown portals) usually mount within a couple of
@@ -250,7 +264,8 @@
         if (
           sibling !== node &&
           sibling.id !== '__a11y-companion-host' &&
-          sibling.id !== '__a11y-color-filters'
+          sibling.id !== '__a11y-color-filters' &&
+          sibling.id !== '__a11y-companion-ruler'
         ) {
           sibling.classList.add('__a11y-reading-dim');
         }
@@ -347,6 +362,7 @@
     hoverTimer: null,
     speak(text, opts = {}) {
       if (!text || !this.synth) return;
+      if (reader.active) reader.stop(); // hover/feedback speech takes over
       this.synth.cancel();
       const u = new SpeechSynthesisUtterance(String(text).slice(0, 32000));
       u.lang = opts.lang || document.documentElement.lang || 'en-US';
@@ -363,10 +379,7 @@
       this.speak(readableText(el));
     },
     readPage() {
-      const main =
-        document.querySelector('main, [role="main"], article, #content, .content') ||
-        document.body;
-      this.speak(main.innerText || main.textContent || '');
+      reader.start();
     },
     // Announce where the user is — the page title and site. (We can't read the
     // browser's address bar, but the page knows its own URL.)
@@ -417,6 +430,205 @@
     },
   };
   window.addEventListener('beforeunload', () => screenReader.stop());
+
+  // ─── Read page aloud (chunked queue with controls) ───────────────────
+  // Chrome's speech synthesis stalls on long utterances (notoriously around
+  // 15 seconds with network voices), so pages are read in sentence-sized
+  // chunks. That also gives us pause/resume/skip and a moving highlight.
+  function splitChunks(text, max = 220) {
+    const out = [];
+    let cur = '';
+    for (const s of text.split(/(?<=[.!?…])\s+/)) {
+      if (s.length > max) {
+        if (cur) { out.push(cur); cur = ''; }
+        for (let i = 0; i < s.length; i += max) out.push(s.slice(i, i + max));
+      } else if ((cur ? cur.length + 1 : 0) + s.length > max) {
+        if (cur) out.push(cur);
+        cur = s;
+      } else {
+        cur = cur ? cur + ' ' + s : s;
+      }
+    }
+    if (cur) out.push(cur);
+    return out;
+  }
+
+  const READ_BLOCKS = 'p, h1, h2, h3, h4, h5, h6, li, blockquote, figcaption, dt, dd, pre, td, th';
+
+  const reader = {
+    queue: [],
+    idx: -1,
+    active: false,
+    paused: false,
+    utter: null,
+    hl: null,
+    // Collect readable blocks from the main content area; fall back to
+    // sentence-grouping the page's plain text when there's no structure.
+    collect() {
+      const root =
+        document.querySelector('main, [role="main"], article, #content, .content') ||
+        document.body;
+      const blocks = [];
+      for (const el of root.querySelectorAll(READ_BLOCKS)) {
+        if (host?.contains(el)) continue;
+        const anc = el.parentElement?.closest(READ_BLOCKS);
+        if (anc && root.contains(anc)) continue; // an ancestor block already covers this text
+        if (!el.getClientRects().length) continue;
+        const text = norm(el.innerText);
+        if (text) blocks.push({ el, text });
+      }
+      if (blocks.length) {
+        return blocks.flatMap((b) => splitChunks(b.text).map((text) => ({ el: b.el, text })));
+      }
+      return splitChunks(norm(root.innerText || '')).map((text) => ({ el: null, text }));
+    },
+    start(plainText) {
+      this.stop();
+      this.queue = plainText
+        ? splitChunks(norm(plainText)).map((text) => ({ el: null, text }))
+        : this.collect();
+      if (!this.queue.length) {
+        return screenReader.speak('Nothing to read on this page.', { lang: 'en-US' });
+      }
+      this.active = true;
+      this.paused = false;
+      this.speakAt(0);
+      updateReadUI();
+    },
+    speakAt(i) {
+      if (!this.active) return;
+      if (i >= this.queue.length) return this.stop();
+      this.idx = Math.max(0, i);
+      const item = this.queue[this.idx];
+      this.highlight(item.el);
+      const u = new SpeechSynthesisUtterance(item.text);
+      u.lang = document.documentElement.lang || 'en-US';
+      u.rate = settings.speechRate || 1;
+      const v = screenReader.pickVoice();
+      if (v) u.voice = v;
+      this.utter = u;
+      // cancel() fires end/error for the in-flight utterance too — only the
+      // utterance that is still current may advance the queue.
+      const advance = () => {
+        if (this.utter === u && this.active && !this.paused) this.speakAt(this.idx + 1);
+      };
+      u.onend = advance;
+      u.onerror = (e) => {
+        if (e.error !== 'canceled' && e.error !== 'interrupted') advance();
+      };
+      screenReader.synth.cancel();
+      screenReader.synth.speak(u);
+    },
+    pauseToggle() {
+      if (!this.active) return;
+      if (!this.paused) {
+        this.paused = true;
+        try { screenReader.synth.pause(); } catch {}
+      } else {
+        this.paused = false;
+        // speaking stays true while paused mid-utterance; if the chunk ended
+        // right as we paused, restart it instead.
+        if (screenReader.synth.speaking) {
+          try { screenReader.synth.resume(); } catch {}
+        } else {
+          this.speakAt(this.idx);
+        }
+      }
+      updateReadUI();
+    },
+    skip(dir) {
+      if (!this.active) return;
+      this.paused = false;
+      try { screenReader.synth.resume(); } catch {}
+      this.speakAt(this.idx + dir);
+      updateReadUI();
+    },
+    stop() {
+      const wasActive = this.active;
+      this.active = false;
+      this.paused = false;
+      this.utter = null;
+      this.highlight(null);
+      this.queue = [];
+      this.idx = -1;
+      try { screenReader.synth.resume(); } catch {}
+      try { screenReader.synth.cancel(); } catch {}
+      if (wasActive) updateReadUI();
+    },
+    highlight(el) {
+      this.hl?.classList.remove('__a11y-reading-now');
+      this.hl = el || null;
+      if (el) {
+        el.classList.add('__a11y-reading-now');
+        try {
+          el.scrollIntoView({ block: 'center', behavior: settings.reduceMotion ? 'auto' : 'smooth' });
+        } catch {}
+      }
+    },
+  };
+
+  // ─── Reading ruler (line-focus band that follows the pointer) ────────
+  const RULER_ID = '__a11y-companion-ruler';
+  document.getElementById(RULER_ID)?.remove(); // stale copy from an orphaned script
+  const ruler = {
+    el: null,
+    moveBound: null,
+    leaveBound: null,
+    sync() {
+      if (settings.ruler && !siteDisabled) this.enable();
+      else this.disable();
+    },
+    enable() {
+      const h = settings.rulerHeight || 80;
+      if (this.el) {
+        this.el.style.height = h + 'px';
+        return;
+      }
+      this.el = document.createElement('div');
+      this.el.id = RULER_ID;
+      // The huge box-shadow dims everything except a transparent band.
+      this.el.style.cssText =
+        'all: initial; position: fixed; left: 0; right: 0; top: -9999px;' +
+        'height: ' + h + 'px; pointer-events: none; z-index: 2147483646;' +
+        'box-shadow: 0 0 0 200000px rgba(15, 23, 42, 0.42);' +
+        'border-top: 1px solid rgba(255,255,255,0.35); border-bottom: 1px solid rgba(255,255,255,0.35);';
+      this.moveBound = (e) => {
+        if (!this.el) return;
+        // Park the band offscreen while the pointer is over our own toolbar.
+        if (host && (e.target === host || host.contains(e.target))) {
+          this.el.style.top = '-9999px';
+          return;
+        }
+        this.el.style.top = e.clientY - this.el.offsetHeight / 2 + 'px';
+      };
+      this.leaveBound = () => {
+        if (this.el) this.el.style.top = '-9999px';
+      };
+      document.addEventListener('mousemove', this.moveBound, { passive: true });
+      document.documentElement.addEventListener('mouseleave', this.leaveBound);
+      document.documentElement.appendChild(this.el);
+    },
+    disable() {
+      if (this.moveBound) document.removeEventListener('mousemove', this.moveBound);
+      if (this.leaveBound) document.documentElement.removeEventListener('mouseleave', this.leaveBound);
+      this.moveBound = this.leaveBound = null;
+      this.el?.remove();
+      this.el = null;
+    },
+  };
+
+  // Pause autoplaying video once per element; if the user starts it again
+  // we leave it alone.
+  const motionPaused = new WeakSet();
+  function pauseAutoplayMedia() {
+    if (!settings.reduceMotion) return;
+    document.querySelectorAll('video[autoplay]').forEach((v) => {
+      if (!v.paused && !motionPaused.has(v)) {
+        motionPaused.add(v);
+        try { v.pause(); } catch {}
+      }
+    });
+  }
 
   // ─── Keyboard navigation ────────────────────────────────────────────
   const kbd = {
@@ -489,6 +701,7 @@
     s.textContent = `
       .__a11y-focused { outline: 3px solid #ff3860 !important; outline-offset: 2px !important; }
       .__a11y-hover-read *:hover { cursor: help !important; }
+      .__a11y-reading-now { outline: 3px solid #2563eb !important; outline-offset: 2px !important; background: rgba(37, 99, 235, 0.08) !important; }
     `;
     (document.head || document.documentElement).appendChild(s);
   }
@@ -557,11 +770,18 @@
       cmd('where am i', () => screenReader.readPageInfo()) ||
       cmd('page info', () => screenReader.readPageInfo()) ||
       cmd('read url', () => screenReader.readPageInfo()) ||
-      cmd('read page', () => screenReader.readPage()) ||
-      cmd('stop reading', () => screenReader.stop()) ||
+      cmd('read page', () => reader.start()) ||
+      cmd('stop reading', () => { reader.stop(); screenReader.stop(); }) ||
+      cmd('next paragraph', () => reader.skip(1)) ||
+      cmd('previous paragraph', () => reader.skip(-1)) ||
+      cmd('pause', () => { if (reader.active && !reader.paused) reader.pauseToggle(); }) ||
+      cmd('resume', () => { if (reader.active && reader.paused) reader.pauseToggle(); }) ||
+      cmd('continue', () => { if (reader.active && reader.paused) reader.pauseToggle(); }) ||
       cmd('bigger text', () => actions.fontSize(10)) ||
       cmd('smaller text', () => actions.fontSize(-10)) ||
       cmd('reading mode', () => actions.toggle('readingMode')) ||
+      cmd('ruler', () => actions.toggle('ruler')) ||
+      cmd('reduce motion', () => actions.toggle('reduceMotion')) ||
       cmd('dark mode', () => actions.setColor('invert')) ||
       cmd('high contrast', () => actions.setColor('high-contrast')) ||
       cmd('default colors', () => actions.setColor('default')) ||
@@ -622,6 +842,7 @@
     reset() {
       Object.entries(DEFAULTS).forEach(([k, v]) => saveSetting(k, v));
       syncFeatureState();
+      reader.stop();
       screenReader.stop();
       applyAllStyles();
       updateUI();
@@ -641,6 +862,7 @@
       screenReader.disableHover();
       screenReader.stop();
     }
+    ruler.sync();
   }
 
   // ─── Toolbar UI (Shadow DOM, isolated from page CSS) ────────────────
@@ -765,6 +987,9 @@
           <button class="chip feat" id="t-readingMode" title="Reading mode" aria-label="Reading mode">
             <span class="ico">📖</span><span class="lbl">Read</span>
           </button>
+          <button class="chip feat" id="t-ruler" title="Reading ruler" aria-label="Reading ruler">
+            <span class="ico">📏</span><span class="lbl">Ruler</span>
+          </button>
           <button class="chip feat" id="t-keyboardNav" title="Keyboard navigation" aria-label="Keyboard navigation">
             <span class="ico">⌨️</span><span class="lbl">Keys</span>
           </button>
@@ -777,6 +1002,16 @@
           <button class="chip feat" id="pageInfo" title="Read page title and URL" aria-label="Read page title and address">
             <span class="ico">ℹ️</span><span class="lbl">Page</span>
           </button>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="group" aria-label="Read aloud">
+          <button class="chip feat" id="read-play" title="Read page aloud" aria-label="Read page aloud">
+            <span class="ico" id="read-play-ico">▶</span><span class="lbl" id="read-play-lbl">Play</span>
+          </button>
+          <button class="chip label hidden" id="read-pause" title="Pause reading" aria-label="Pause reading">⏸</button>
+          <button class="chip label hidden" id="read-skip" title="Skip to next block" aria-label="Skip to next block">⏭</button>
         </div>
 
         <div class="divider"></div>
@@ -816,11 +1051,15 @@
       };
     });
 
-    ['dyslexiaFont', 'readingMode', 'keyboardNav', 'screenReader', 'voiceInput'].forEach((k) => {
+    ['dyslexiaFont', 'readingMode', 'ruler', 'keyboardNav', 'screenReader', 'voiceInput'].forEach((k) => {
       $('#t-' + k).onclick = () => actions.toggle(k);
     });
 
     $('#pageInfo').onclick = () => screenReader.readPageInfo();
+
+    $('#read-play').onclick = () => (reader.active ? reader.stop() : reader.start());
+    $('#read-pause').onclick = () => reader.pauseToggle();
+    $('#read-skip').onclick = () => reader.skip(1);
 
     $('#colorMode').onchange = (e) => actions.setColor(e.target.value);
   }
@@ -832,9 +1071,28 @@
     $('#fab').classList.toggle('hidden', settings.toolbarVisible);
     $('#fontval').textContent = settings.fontSize + '%';
     $('#colorMode').value = settings.colorMode;
-    ['dyslexiaFont', 'readingMode', 'keyboardNav', 'screenReader', 'voiceInput'].forEach((k) => {
+    ['dyslexiaFont', 'readingMode', 'ruler', 'keyboardNav', 'screenReader', 'voiceInput'].forEach((k) => {
       $('#t-' + k).setAttribute('aria-pressed', String(!!settings[k]));
     });
+    updateReadUI();
+  }
+
+  function updateReadUI() {
+    if (!shadow) return;
+    const $ = (s) => shadow.querySelector(s);
+    const play = $('#read-play');
+    if (!play) return;
+    play.setAttribute('aria-pressed', String(reader.active));
+    play.setAttribute('aria-label', reader.active ? 'Stop reading' : 'Read page aloud');
+    play.title = reader.active ? 'Stop reading' : 'Read page aloud';
+    $('#read-play-ico').textContent = reader.active ? '⏹' : '▶';
+    $('#read-play-lbl').textContent = reader.active ? 'Stop' : 'Play';
+    const pause = $('#read-pause');
+    pause.classList.toggle('hidden', !reader.active);
+    pause.textContent = reader.paused ? '▶' : '⏸';
+    pause.setAttribute('aria-label', reader.paused ? 'Resume reading' : 'Pause reading');
+    pause.title = reader.paused ? 'Resume reading' : 'Pause reading';
+    $('#read-skip').classList.toggle('hidden', !reader.active);
   }
 
   // ─── Init & live sync ───────────────────────────────────────────────
@@ -859,6 +1117,8 @@
       voice.stop();
       screenReader.disableHover();
       screenReader.stop();
+      reader.stop();
+      ruler.disable();
       document.getElementById(STYLE_ID)?.remove();
       document.getElementById(HELPER_STYLE_ID)?.remove();
       document
@@ -904,11 +1164,14 @@
   // 1. Re-inject toolbar if removed by client routing
   // 2. Re-apply reading mode on DOM mutations (debounced)
   // 3. Re-apply on URL change (history pushState/replaceState)
-  let readingDebounce, hcDebounce;
+  let readingDebounce, hcDebounce, motionDebounce;
   const observer = new MutationObserver(() => {
     if (siteDisabled) return;
     if (host && !document.documentElement.contains(host)) {
       document.documentElement.appendChild(host);
+    }
+    if (ruler.el && !document.documentElement.contains(ruler.el)) {
+      document.documentElement.appendChild(ruler.el);
     }
     if (settings.readingMode) {
       clearTimeout(readingDebounce);
@@ -918,11 +1181,16 @@
       clearTimeout(hcDebounce);
       hcDebounce = setTimeout(markHcSurfaces, 400);
     }
+    if (settings.reduceMotion) {
+      clearTimeout(motionDebounce);
+      motionDebounce = setTimeout(pauseAutoplayMedia, 400);
+    }
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
   // Patch history APIs to detect SPA navigation
   const fireUrlChange = () => {
+    reader.stop(); // the content under the reading queue is changing
     setTimeout(() => {
       if (settings.readingMode) applyReadingMode();
       if (settings.keyboardNav) {
