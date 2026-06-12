@@ -617,6 +617,97 @@
     },
   };
 
+  // ─── On-device AI (experimental) ──────────────────────────────────────
+  // Chrome's built-in Gemini Nano APIs (138+): the Summarizer web API here in
+  // the content script, and the extension-only Prompt API via the service
+  // worker. Inference runs locally — page text never leaves the device.
+  const ai = {
+    busy: false,
+    showSheet(title, text) {
+      if (!shadow) return;
+      const sheet = shadow.querySelector('#sheet');
+      if (!sheet) return;
+      shadow.querySelector('#sheet-title').textContent = title;
+      shadow.querySelector('#sheet-body').textContent = text;
+      sheet.classList.remove('hidden');
+      sheet.focus({ preventScroll: true });
+    },
+    hideSheet() {
+      shadow?.querySelector('#sheet')?.classList.add('hidden');
+    },
+    errorMessage(err) {
+      if (err?.name === 'NotAllowedError') {
+        return 'Chrome only downloads the on-device model after a direct click — use the ✨ button on the toolbar once, then try again.';
+      }
+      return 'On-device AI failed: ' + (err?.message || err);
+    },
+    async summarize(speakResult) {
+      if (this.busy) return;
+      if (!('Summarizer' in self)) {
+        return this.showSheet(
+          'Summary',
+          'On-device AI is not available in this browser. Summaries need Chrome 138 or newer with the built-in model (not yet available on all devices).'
+        );
+      }
+      this.busy = true;
+      try {
+        const availability = await Summarizer.availability();
+        if (availability === 'unavailable') {
+          return this.showSheet('Summary', 'This device cannot run the on-device AI model.');
+        }
+        if (availability !== 'available') {
+          this.showSheet('Summary', 'Downloading the on-device model — this happens once and can take a few minutes…');
+        }
+        const summarizer = await Summarizer.create({
+          type: 'key-points',
+          format: 'plain-text',
+          length: 'medium',
+          monitor: (m) =>
+            m.addEventListener('downloadprogress', (e) => {
+              this.showSheet('Summary', `Downloading the on-device model… ${Math.round((e.loaded || 0) * 100)}%`);
+            }),
+        });
+        const text = pageText(15000);
+        if (!text) return this.showSheet('Summary', 'Could not find readable text on this page.');
+        this.showSheet('Summary', 'Summarizing…');
+        const out = await summarizer.summarize(text, {
+          context: 'Summarize for a general audience in plain language.',
+        });
+        summarizer.destroy?.();
+        this.showSheet('Summary', out || 'No summary produced.');
+        if (speakResult && out) reader.start(out);
+      } catch (err) {
+        this.showSheet('Summary', this.errorMessage(err));
+      } finally {
+        this.busy = false;
+      }
+    },
+    async simplify(speakResult) {
+      const sel = norm(String(window.getSelection?.().toString() || ''));
+      if (!sel) {
+        return this.showSheet('Plain language', 'Select some text first, then try simplify again.');
+      }
+      this.showSheet('Plain language', 'Rewriting in plain language…');
+      try {
+        const res = await chrome.runtime.sendMessage({ type: 'a11y-simplify', text: sel.slice(0, 4000) });
+        const out = res?.ok ? res.text : null;
+        this.showSheet('Plain language', out || res?.error || 'Simplify is unavailable.');
+        if (speakResult && out) reader.start(out);
+      } catch (err) {
+        this.showSheet('Plain language', this.errorMessage(err));
+      }
+    },
+  };
+
+  function pageText(maxLen) {
+    let out = '';
+    for (const b of reader.collect()) {
+      if (out.length >= maxLen) break;
+      out += b.text + '\n';
+    }
+    return out.slice(0, maxLen).trim();
+  }
+
   // Pause autoplaying video once per element; if the user starts it again
   // we leave it alone.
   const motionPaused = new WeakSet();
@@ -777,6 +868,8 @@
       cmd('pause', () => { if (reader.active && !reader.paused) reader.pauseToggle(); }) ||
       cmd('resume', () => { if (reader.active && reader.paused) reader.pauseToggle(); }) ||
       cmd('continue', () => { if (reader.active && reader.paused) reader.pauseToggle(); }) ||
+      cmd('summarize', () => ai.summarize(true)) ||
+      cmd('simplify', () => ai.simplify(true)) ||
       cmd('bigger text', () => actions.fontSize(10)) ||
       cmd('smaller text', () => actions.fontSize(-10)) ||
       cmd('reading mode', () => actions.toggle('readingMode')) ||
@@ -960,6 +1053,26 @@
           font-size: 22px; cursor: pointer;
           box-shadow: 0 6px 20px rgba(37,99,235,0.4);
         }
+        .sheet {
+          position: absolute;
+          bottom: calc(100% + 10px);
+          left: 50%;
+          transform: translateX(-50%);
+          width: min(560px, calc(100vw - 48px));
+          max-height: 50vh;
+          overflow: auto;
+          background: #fff;
+          color: #0f172a;
+          border: 1px solid rgba(15, 23, 42, 0.12);
+          border-radius: 14px;
+          box-shadow: 0 16px 48px rgba(15, 23, 42, 0.25);
+          padding: 12px 16px 16px;
+          font-family: -apple-system, system-ui, sans-serif;
+        }
+        .sheet:focus { outline: 2px solid #2563eb; }
+        .sheet-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+        .sheet-head strong { flex: 1; font-size: 13px; }
+        .sheet-body { font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
         .hidden { display: none; }
       </style>
       <div class="panel" id="panel" role="toolbar" aria-label="A11y Companion">
@@ -1002,6 +1115,9 @@
           <button class="chip feat" id="pageInfo" title="Read page title and URL" aria-label="Read page title and address">
             <span class="ico">ℹ️</span><span class="lbl">Page</span>
           </button>
+          <button class="chip feat" id="ai-summary" title="Summarize page (on-device AI)" aria-label="Summarize page with on-device AI">
+            <span class="ico">✨</span><span class="lbl">Sum</span>
+          </button>
         </div>
 
         <div class="divider"></div>
@@ -1030,6 +1146,14 @@
 
         <button class="reset" id="reset" title="Reset all" aria-label="Reset all settings">↺</button>
         <button class="close" id="close" title="Hide toolbar" aria-label="Hide toolbar">×</button>
+      </div>
+      <div class="sheet hidden" id="sheet" role="dialog" aria-label="A11y Companion result" tabindex="-1">
+        <div class="sheet-head">
+          <strong id="sheet-title">Summary</strong>
+          <button class="chip label" id="sheet-speak" title="Read result aloud" aria-label="Read result aloud">🔊</button>
+          <button class="close" id="sheet-close" title="Close" aria-label="Close">×</button>
+        </div>
+        <div class="sheet-body" id="sheet-body"></div>
       </div>
       <button class="fab hidden" id="fab" aria-label="Show accessibility toolbar">♿</button>
     `;
@@ -1060,6 +1184,16 @@
     $('#read-play').onclick = () => (reader.active ? reader.stop() : reader.start());
     $('#read-pause').onclick = () => reader.pauseToggle();
     $('#read-skip').onclick = () => reader.skip(1);
+
+    $('#ai-summary').onclick = () => ai.summarize();
+    $('#sheet-close').onclick = () => ai.hideSheet();
+    $('#sheet-speak').onclick = () => {
+      const text = $('#sheet-body').textContent;
+      if (text) reader.start(text);
+    };
+    $('#sheet').addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') ai.hideSheet();
+    });
 
     $('#colorMode').onchange = (e) => actions.setColor(e.target.value);
   }
