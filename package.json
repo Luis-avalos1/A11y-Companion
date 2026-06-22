@@ -1,0 +1,21 @@
+{
+  "name": "a11y-companion",
+  "version": "0.2.0",
+  "description": "Tooling for the A11y Companion Chrome extension: live demo site, demo-video recorder, store-asset capture, and packaging.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync": "node scripts/sync-extension.mjs",
+    "serve": "node scripts/static-server.mjs demo 8080",
+    "record": "node scripts/record-demo.mjs",
+    "screenshots": "node scripts/capture-screenshots.mjs",
+    "zip": "node scripts/build-zip.mjs",
+    "verify": "node scripts/verify-demo.mjs",
+    "assets": "npm run sync && npm run verify && npm run record && npm run screenshots",
+    "build": "npm run sync && npm run zip"
+  },
+  "devDependencies": {
+    "ffmpeg-static": "^5.3.0",
+    "playwright": "^1.61.0"
+  }
+}

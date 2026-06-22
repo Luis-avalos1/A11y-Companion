@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" role="img" aria-label="Abstract illustration of a person reading on a glowing screen surrounded by colorful interface controls">
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7c3aed"/>
+      <stop offset="0.5" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#06b6d4"/>
+    </linearGradient>
+    <radialGradient id="g2" cx="0.7" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#fb7185"/>
+      <stop offset="1" stop-color="#f43f5e" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="600" fill="url(#g1)"/>
+  <rect width="1200" height="600" fill="url(#g2)"/>
+  <g opacity="0.92">
+    <circle cx="250" cy="180" r="90" fill="#fde047"/>
+    <circle cx="980" cy="430" r="120" fill="#22c55e" opacity="0.85"/>
+    <rect x="470" y="120" width="360" height="240" rx="22" fill="#0b1220" opacity="0.55"/>
+    <rect x="500" y="156" width="300" height="20" rx="10" fill="#e2e8f0"/>
+    <rect x="500" y="196" width="260" height="14" rx="7" fill="#94a3b8"/>
+    <rect x="500" y="224" width="290" height="14" rx="7" fill="#94a3b8"/>
+    <rect x="500" y="252" width="210" height="14" rx="7" fill="#94a3b8"/>
+    <rect x="500" y="300" width="120" height="34" rx="17" fill="#22d3ee"/>
+    <circle cx="170" cy="470" r="46" fill="#f97316"/>
+    <path d="M120 470h100M170 420v100" stroke="#fff7ed" stroke-width="10" stroke-linecap="round"/>
+  </g>
+</svg>

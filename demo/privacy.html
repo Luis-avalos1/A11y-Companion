@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy Policy — A11y Companion</title>
+  <meta name="description" content="A11y Companion does not collect, transmit, sell, or share any personal data. Everything happens locally in your browser.">
+  <link rel="icon" href="assets/icon.svg">
+  <style>
+    :root { --ink:#14181f; --muted:#5b6675; --brand:#1d4ed8; --line:#e4e8ef; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+           color:var(--ink); background:#f6f7f9; line-height:1.65; }
+    .top { background:linear-gradient(150deg,#0b1220,#0e2a4d); color:#fff; padding:34px 20px; }
+    .top .in { max-width:760px; margin:0 auto; display:flex; align-items:center; gap:14px; }
+    .top img { width:44px; height:44px; border-radius:10px; }
+    .top h1 { margin:0; font-size:24px; }
+    .top a { color:#aecbff; font-size:14px; }
+    main { max-width:760px; margin:0 auto; padding:32px 20px 80px; }
+    .updated { color:var(--muted); font-size:14px; margin:0 0 24px; }
+    h2 { font-size:20px; margin:32px 0 8px; }
+    p, li { font-size:16px; }
+    a { color:var(--brand); }
+    ul { padding-left:22px; }
+    .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:18px 22px; margin:18px 0; }
+    .lead { font-size:18px; }
+    code { background:#eef2f8; padding:1px 6px; border-radius:5px; font-size:14px; }
+    footer { max-width:760px; margin:0 auto; padding:0 20px 60px; color:var(--muted); font-size:14px; }
+  </style>
+</head>
+<body>
+  <div class="top"><div class="in">
+    <img src="assets/icon128.png" alt="A11y Companion logo">
+    <div>
+      <h1>Privacy Policy — A11y Companion</h1>
+      <a href="index.html">← Back to the demo</a>
+    </div>
+  </div></div>
+
+  <main>
+    <p class="updated">Last updated: June 11, 2026</p>
+
+    <p class="lead">A11y Companion is a browser extension that adds a personal accessibility toolbar to web pages. This policy explains what the extension does and does not do with your data.</p>
+
+    <div class="card">
+      <h2 style="margin-top:0">Summary</h2>
+      <p>A11y Companion does <b>not</b> collect, transmit, sell, or share any personal data. The extension has no servers and no analytics. Everything it does happens locally in your browser.</p>
+    </div>
+
+    <h2>What the extension stores</h2>
+    <p>The extension saves only your <b>accessibility preferences</b>, such as:</p>
+    <ul>
+      <li>Whether the toolbar is shown or hidden</li>
+      <li>Text size, letter spacing, and line height</li>
+      <li>Dyslexia-friendly font on/off</li>
+      <li>Color mode (grayscale, invert, high contrast, color-blindness simulations)</li>
+      <li>Screen reader, voice commands, keyboard navigation, and reading mode toggles</li>
+      <li>Reading ruler, reduce motion, speech voice/rate, and voice recognition language</li>
+      <li>Per-site preferences (only the hostname of sites where you turn the extension off or use site-specific settings — never full URLs or page content)</li>
+    </ul>
+    <p>These settings are stored using Chrome's built-in <code>chrome.storage.sync</code> so they can follow you across your own devices when you are signed in to Chrome. This data stays within your Google/Chrome account and is never sent to the developer or any third party.</p>
+    <p>The extension does <b>not</b> collect names, email addresses, browsing history, page content, form data, passwords, or any other personally identifiable information.</p>
+
+    <h2>Microphone</h2>
+    <p>If you turn on <b>voice commands</b>, the extension uses your browser's built-in Web Speech API to listen for commands. Speech recognition is handled by the browser; the extension receives only the recognized text in order to act on a command (for example, "scroll down"). Audio is not recorded, stored, or sent to the developer. You can turn voice commands off at any time, and the browser will ask for microphone permission before listening.</p>
+
+    <h2>Page content</h2>
+    <p>Accessibility features such as reading mode and the screen reader read text directly on the page you are viewing, in your browser, to apply styling or speak it aloud. This page content is never stored or transmitted anywhere.</p>
+
+    <h2>On-device AI (summaries and plain-language rewrites)</h2>
+    <p>The summarize and simplify features use <b>Chrome's built-in on-device AI model</b> (available in Chrome 138 and newer on supported devices). The page text or selection being summarized is processed entirely on your own computer by the browser's local model. It is not sent to the developer or to any server by the extension. If your browser does not include the on-device model, these features simply report that they are unavailable — there is no cloud fallback.</p>
+
+    <h2>Permissions</h2>
+    <p>The extension requests broad host access (<code>&lt;all_urls&gt;</code>) only so that the accessibility toolbar can work on every website you choose to visit. It does not use this access to read or send your data anywhere. The <code>activeTab</code> permission lets the popup show per-site controls for the tab you have open.</p>
+
+    <h2>Third parties</h2>
+    <p>A11y Companion uses no third-party analytics, advertising, or tracking services.</p>
+
+    <h2>Changes to this policy</h2>
+    <p>If this policy changes, the updated version will be posted at this URL with a new "last updated" date.</p>
+
+    <h2>Contact</h2>
+    <p>Questions about this policy can be sent to: <a href="mailto:avaloseluis@gmail.com">avaloseluis@gmail.com</a></p>
+  </main>
+
+  <footer>A11y Companion · <a href="https://github.com/Luis-avalos1/accessibility-plugin">Source on GitHub</a></footer>
+</body>
+</html>

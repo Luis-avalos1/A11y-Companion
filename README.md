@@ -9,6 +9,24 @@ follows you across the web, applying your reading and vision preferences on ever
 
 ---
 
+## Try it
+
+**▶ [Live demo — no install needed](https://luis-avalos1.github.io/accessibility-plugin/)** —
+the *real* toolbar runs on a sample article right in your browser, via a small
+`chrome.*` shim. Resize text, switch fonts, flip to dark/high-contrast, run the
+color-blindness filters, read the page aloud, and more.
+
+[![Watch the 90-second demo](demo/assets/poster.png)](demo/assets/a11y-companion-demo.mp4)
+
+_↑ ~90-second guided tour (silent, with on-screen captions). Click to play the
+MP4, or watch it embedded at the bottom of the [live demo](https://luis-avalos1.github.io/accessibility-plugin/#video)._
+
+> Heads-up: replace `luis-avalos1.github.io/accessibility-plugin` with your own
+> GitHub Pages URL if your username/repo differ (see
+> [`store/submission-checklist.md`](store/submission-checklist.md)).
+
+---
+
 ## Features
 
 ### Text & reading
@@ -148,44 +166,49 @@ cleanly.
 
 ---
 
+## Demo, assets & tooling
+
+This repo ships a small Node toolchain (Playwright + ffmpeg-static) that builds
+everything needed to show off and publish the extension. Install dev deps once
+with `npm install`, then:
+
+| Command               | What it does                                                            |
+| --------------------- | ---------------------------------------------------------------------- |
+| `npm run serve`       | Serve the live demo at <http://localhost:8080>                          |
+| `npm run verify`      | Load the demo in a real browser and assert every feature works          |
+| `npm run record`      | Record the guided tour → `demo/assets/a11y-companion-demo.mp4` / `.webm` |
+| `npm run screenshots` | Generate 1280×800 store screenshots + promo tiles + a video poster      |
+| `npm run assets`      | sync → verify → record → screenshots (everything)                       |
+| `npm run build`       | Build the upload zip → `dist/a11y-companion-<version>.zip`               |
+
+- **`demo/`** is the live, zero-install demo site (and the GitHub Pages site). It
+  runs the *real* `content.js` through a `chrome.*` shim (`demo/chrome-shim.js`),
+  so it can't drift from the extension. `npm run sync` (and the Pages workflow)
+  copy `shared.js`, `content.js`, and the fonts into `demo/lib/`.
+- **`store/`** holds the Chrome Web Store listing copy, permission/privacy
+  answers, screenshots, and promo tiles — see [`store/README.md`](store/README.md).
+
 ## Publishing to the Chrome Web Store
 
-### 1. Package the extension
+Full walkthrough: **[`store/submission-checklist.md`](store/submission-checklist.md)**. In short:
 
-Create a zip of the **contents** of `extension/` (the `manifest.json` must sit at the root
-of the zip, not inside a nested folder):
-
-```sh
-cd extension
-zip -r ../a11y-companion.zip . -x "*.DS_Store"
-```
-
-### 2. Register as a developer
-
-1. Go to the [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole).
-2. Pay the one-time **$5** developer registration fee (covers the account, not per item).
-
-### 3. Create the listing
-
-1. Click **Add new item** and upload the zip.
-2. Fill in the listing details:
-   - Description (the manifest description is a good starting point).
-   - Category: **Accessibility**.
-   - At least one **screenshot** (1280x800 or 640x400).
-   - The 128x128 store icon (included).
-3. Complete the **Privacy practices** tab:
-   - Declare data usage. This extension stores only user settings in
-     `chrome.storage.sync` and collects no personal data.
-   - Justify the broad permissions. The toolbar requests `<all_urls>` because it must run
-     on every site the user visits to provide accessibility features.
-   - Add a privacy policy URL (required when requesting broad host permissions) — see
-     `PRIVACY.md`.
-
-### 4. Submit for review
-
-Submit and wait for review. Extensions that request `<all_urls>` typically get extra
-scrutiny, so the first review can take longer than usual and may include a clarification
-request. Each new upload must use a higher `version` number in `manifest.json`.
+1. **Host the privacy policy** — enable GitHub Pages (the included
+   `.github/workflows/pages.yml` publishes `demo/`, which serves
+   [`privacy.html`](demo/privacy.html)). A policy URL is *required* because of the
+   `<all_urls>` permission.
+2. **Build the package** — `npm run build` produces
+   `dist/a11y-companion-<version>.zip` with `manifest.json` at the archive root
+   (the build verifies this). Bump `version` in `manifest.json` for each upload.
+3. **Create the item** — at the
+   [Developer Dashboard](https://chrome.google.com/webstore/devconsole) (one-time
+   $5 fee), upload the zip and paste the copy from
+   [`store/listing.md`](store/listing.md), the justifications from
+   [`store/permissions-justification.md`](store/permissions-justification.md), and
+   the data answers from
+   [`store/privacy-data-disclosures.md`](store/privacy-data-disclosures.md). Add
+   the screenshots from `store/screenshots/`.
+4. **Submit** — `<all_urls>` draws extra scrutiny, so the first review can take
+   longer and may include a clarification request.
 
 ---
 
@@ -224,7 +247,8 @@ site. Along the way it gained:
 
 ## Roadmap
 
-- Real, designed PNG icons and store screenshots.
+- Real, designed PNG icons. (Store screenshots, promo tiles, and a demo video now
+  ship — see `store/` and `demo/assets/`.)
 - Draggable toolbar with remembered position.
 - Colorblind **correction** (daltonization) filters alongside the simulations.
 - More bundled fonts (Atkinson Hyperlegible, Lexend).
