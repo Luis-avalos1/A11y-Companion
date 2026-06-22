@@ -19,3 +19,7 @@ npm-debug.log*
 
 # Build artifacts (store submission zips)
 *.zip
+
+# Asset-generation temp dirs
+.video-tmp/
+.qa-frames/

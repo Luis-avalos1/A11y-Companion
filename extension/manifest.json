@@ -1,13 +1,17 @@
 {
   "manifest_version": 3,
   "name": "A11y Companion — Accessibility Toolbar",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A personal accessibility toolbar for any website. Dyslexia font, color modes, screen reader, voice commands, keyboard navigation, and more.",
-  "permissions": ["storage", "activeTab", "scripting"],
+  "permissions": ["storage", "activeTab"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html",
     "default_title": "A11y Companion"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
   },
   "background": {
     "service_worker": "background.js"
@@ -15,7 +19,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["shared.js", "content.js"],
       "run_at": "document_idle",
       "all_frames": false
     }
@@ -30,6 +34,14 @@
     "toggle-toolbar": {
       "suggested_key": { "default": "Alt+Shift+A" },
       "description": "Toggle the accessibility toolbar"
+    },
+    "toggle-screen-reader": {
+      "suggested_key": { "default": "Alt+Shift+S" },
+      "description": "Toggle the hover-to-read screen reader"
+    },
+    "toggle-reading-mode": {
+      "suggested_key": { "default": "Alt+Shift+R" },
+      "description": "Toggle reading mode"
     }
   },
   "icons": {

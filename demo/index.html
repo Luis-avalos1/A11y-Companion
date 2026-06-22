@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A11y Companion — Live Demo</title>
+  <meta name="description" content="Try A11y Companion live in your browser — no install needed. A personal accessibility toolbar with dyslexia font, color modes, reading mode, read-aloud, voice commands, and on-device AI.">
+  <link rel="icon" href="assets/icon.svg">
+  <link rel="stylesheet" href="styles.css">
+  <!-- Set up the chrome.* shim and load the REAL extension code BEFORE the page
+       finishes, so the toolbar mounts on load exactly like the installed
+       extension. The content script self-initialises on DOMContentLoaded. -->
+  <script src="chrome-shim.js"></script>
+  <script src="lib/shared.js"></script>
+  <script src="lib/content.js" defer></script>
+</head>
+<body>
+
+<!-- ───────────────── Demo shell (dims away in Reading mode) ───────────────── -->
+<header class="demo-shell">
+  <div class="wrap">
+    <div class="demo-top">
+      <div class="brand-lockup">
+        <img src="assets/icon128.png" alt="A11y Companion logo">
+        <div>
+          <b>A11y Companion</b>
+          <span>Accessibility toolbar for any website</span>
+        </div>
+      </div>
+      <span class="pill"><span class="dot"></span> Live demo — running in your browser, nothing to install</span>
+    </div>
+
+    <div class="demo-hero">
+      <h1>See an accessibility toolbar reshape a real web page — live.</h1>
+      <p>
+        Everything below is a normal article. The floating bar at the bottom of your
+        screen is the <b>actual</b> A11y Companion extension, running on this page through
+        a small shim. Resize text, switch on a dyslexia font, flip to dark or
+        high-contrast, turn on the reading ruler, have the page read aloud, and more —
+        no extension required.
+      </p>
+      <div class="cta-row">
+        <button class="btn btn-primary" id="play-tour" aria-label="Play the guided feature tour">
+          ▶ Play the 90-second guided tour
+        </button>
+        <a class="btn btn-ghost" id="cta-store" href="#install" >Add to Chrome</a>
+        <a class="btn btn-ghost" id="cta-github" href="https://github.com/Luis-avalos1/accessibility-plugin" target="_blank" rel="noopener">
+          View source on GitHub
+        </a>
+      </div>
+
+      <div class="callout">
+        <span class="arrow" aria-hidden="true">↓</span>
+        <span>Look at the bottom of the page — that floating bar is the live toolbar. Try the buttons, or hit <b>Play the guided tour</b>.</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ───────────────── One-tap presets (write to the same storage the toolbar reads) ───────────────── -->
+<div class="presets-bar">
+  <div class="wrap">
+    <span class="lab">One-tap presets:</span>
+    <button class="preset-btn" data-preset="dyslexia">Dyslexia</button>
+    <button class="preset-btn" data-preset="low-vision">Low vision</button>
+    <button class="preset-btn" data-preset="adhd">ADHD / Focus</button>
+    <button class="preset-btn" data-preset="light-sensitivity">Light sensitivity</button>
+    <button class="preset-btn reset" data-preset="__reset">Reset everything</button>
+  </div>
+</div>
+
+<!-- ───────────────── The sample website (the star of the demo) ───────────────── -->
+<div class="sample-site">
+  <div class="wrap">
+    <div class="masthead">
+      <span class="logo">The Daily Lens</span>
+      <nav aria-label="Sections">
+        <a href="#">World</a>
+        <a href="#">Science</a>
+        <a href="#">Design</a>
+        <a href="#">Opinion</a>
+      </nav>
+    </div>
+
+    <main>
+      <article>
+        <p class="kicker">Design &amp; Accessibility</p>
+        <h1 class="headline">The web wasn't built for everyone. A tiny toolbar is trying to fix that.</h1>
+
+        <div class="byline">
+          <img class="avatar" src="assets/avatar.svg" alt="Portrait of columnist Rivka Mendez">
+          <div>
+            By <b>Rivka Mendez</b> · 8 min read
+            <span class="live"> · <span class="blip" aria-hidden="true"></span>Updating live</span>
+          </div>
+        </div>
+
+        <figure class="hero-figure">
+          <img src="assets/hero.svg" alt="A person reading on a glowing screen surrounded by colorful interface controls">
+          <figcaption>Roughly one in six people lives with a disability — and far more hit reading barriers every day.</figcaption>
+        </figure>
+
+        <p>
+          Open almost any website and you'll meet a wall of small, low-contrast, tightly
+          packed text. For most people it's a mild annoyance. For someone with dyslexia,
+          low vision, ADHD, color blindness, or simply tired, aging eyes, that same wall
+          can make a page nearly unusable. The information is there — it's just locked
+          behind type that's too small, lines that run too long, and colors that blur
+          together.
+        </p>
+
+        <p>
+          The usual advice is to wait for every site on the internet to fix itself. That
+          is not a plan. So a growing class of tools flips the model: instead of fixing
+          ten million sites, you carry your own reading preferences with you and apply
+          them to whatever page you land on. <a href="#install">A11y Companion</a> is one
+          of these — a personal accessibility toolbar that lives in your browser and works
+          on every site you visit.
+        </p>
+
+        <blockquote class="pullquote">
+          "Accessibility isn't a feature you bolt onto one website. It's something a reader
+          should be able to bring with them everywhere."
+        </blockquote>
+
+        <h2>What it actually does</h2>
+        <p>
+          The toolbar groups its tools into a few simple ideas: change the <b>text</b>,
+          change the <b>color</b>, and let the page <b>speak</b> or take commands. None of
+          it requires the website to cooperate.
+        </p>
+
+        <h3>Reading and text</h3>
+        <ul>
+          <li><b>Bigger text and spacing</b> — scale the font and open up letter and line spacing without breaking the layout.</li>
+          <li><b>Dyslexia-friendly font</b> — swap the whole page to OpenDyslexic in one tap.</li>
+          <li><b>Reading mode</b> — strip a page down to just the article, dim everything else, and reflow it into a clean column.</li>
+          <li><b>Reading ruler</b> — a focus band that follows your pointer and dims the rest, so you never lose your line.</li>
+        </ul>
+
+        <h3>Color and vision</h3>
+        <p>
+          Beyond grayscale, dark mode, and high contrast, it ships real
+          <b>color-blindness simulations</b> built on color-matrix filters — useful both
+          for people who need them and for designers checking their work. Consider the
+          classic color-vision plate below: many people read a number in it instantly,
+          while others see only dots. Switch the color mode to <b>Deuteranopia</b> on the
+          toolbar and watch the figure fade.
+        </p>
+
+        <figure class="inline-figure" style="max-width:420px;margin-inline:auto;">
+          <img src="assets/colorblind-plate.svg" alt="An Ishihara color vision test plate; most people see the number five.">
+          <figcaption>A color-vision plate. Try the color-blindness filters on the toolbar and watch the hidden number wash out.</figcaption>
+        </figure>
+
+        <h3>Speech and control</h3>
+        <p>
+          Point your mouse at any line and the <b>screen reader</b> speaks it aloud after a
+          short pause. Press play and the whole article is <b>read aloud</b> in chunks with
+          a moving highlight. Turn on <b>voice commands</b> and you can say "scroll down,"
+          "reading mode," or even "click add to chrome" — entirely hands-free.
+        </p>
+
+        <table class="data">
+          <caption>Who hits reading barriers on the web</caption>
+          <thead>
+            <tr><th>Audience</th><th>Common need</th><th>Tool that helps</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Dyslexia</td><td>Letter clarity &amp; spacing</td><td>OpenDyslexic font, ruler</td></tr>
+            <tr><td>Low vision</td><td>Larger, higher-contrast text</td><td>Text size, high contrast</td></tr>
+            <tr><td>Color blindness</td><td>Distinguishing hues</td><td>Color-blindness filters</td></tr>
+            <tr><td>ADHD / focus</td><td>Fewer distractions</td><td>Reading mode, reduce motion</td></tr>
+            <tr><td>Light sensitivity</td><td>Lower glare</td><td>Invert / dark mode</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Privacy by design</h2>
+        <p>
+          The cleverest part might be the quietest: the experimental <b>summarize</b> and
+          <b>simplify</b> features run on Chrome's built-in on-device AI model. Page text
+          is processed on your own machine — there are no servers, no accounts, and no
+          analytics. Your settings sync across your own devices through your browser
+          account, and nothing else leaves your computer.
+        </p>
+        <p>
+          It is, in the end, a small idea executed carefully: the reader, not the website,
+          decides how the web should look and sound. Try it right now using the toolbar at
+          the bottom of this page — or take the guided tour.
+        </p>
+
+        <div class="newsletter" id="install">
+          <h3>Get A11y Companion</h3>
+          <p>Install the real extension from the Chrome Web Store, or read the source. (This box is part of the demo — the email field does nothing.)</p>
+          <form onsubmit="return false;">
+            <input type="email" placeholder="you@example.com" aria-label="Email address (demo only)">
+            <button type="submit">Add to Chrome</button>
+          </form>
+        </div>
+
+        <h3>Keep reading</h3>
+        <div class="related">
+          <div class="card">
+            <a href="#"><img src="assets/card-reading.svg" alt="An open book with flowing lines of text"></a>
+            <div class="card-body"><h4><a href="#">Reading mode, explained</a></h4><p>How a page gets stripped to its essence.</p></div>
+          </div>
+          <div class="card">
+            <a href="#"><img src="assets/card-color.svg" alt="A spectrum of color swatches"></a>
+            <div class="card-body"><h4><a href="#">Designing for color blindness</a></h4><p>Why hue alone is never enough.</p></div>
+          </div>
+          <div class="card">
+            <a href="#"><img src="assets/card-voice.svg" alt="A microphone with sound waves"></a>
+            <div class="card-body"><h4><a href="#">A web you can talk to</a></h4><p>Hands-free browsing with voice commands.</p></div>
+          </div>
+        </div>
+      </article>
+    </main>
+  </div>
+</div>
+
+<!-- ───────────────── Demo video ───────────────── -->
+<section class="video-section" id="video">
+  <div class="wrap">
+    <h2>Watch the 90-second feature tour</h2>
+    <p>The same guided tour you can run above, recorded end to end.</p>
+    <div class="video-frame" id="video-frame">
+      <video id="demo-video" controls playsinline preload="metadata" poster="assets/poster.png">
+        <source src="assets/a11y-companion-demo.mp4" type="video/mp4">
+        <source src="assets/a11y-companion-demo.webm" type="video/webm">
+      </video>
+    </div>
+  </div>
+</section>
+
+<footer class="site-foot">
+  <div class="wrap">
+    <span>The Daily Lens — a fictional publication built to demonstrate <b>A11y Companion</b>.</span>
+    <span>
+      <a href="https://github.com/Luis-avalos1/accessibility-plugin" target="_blank" rel="noopener">GitHub</a> ·
+      <a href="privacy.html">Privacy</a> ·
+      <a href="#video">Demo video</a>
+    </span>
+  </div>
+</footer>
+
+<script src="demo.js" defer></script>
+<script src="tour.js" defer></script>
+</body>
+</html>

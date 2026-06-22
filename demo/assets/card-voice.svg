@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 240" role="img" aria-label="A microphone with sound waves radiating outward">
+  <rect width="400" height="240" fill="#082f49"/>
+  <rect x="182" y="64" width="36" height="74" rx="18" fill="#38bdf8"/>
+  <path d="M162 116a38 38 0 0 0 76 0" fill="none" stroke="#7dd3fc" stroke-width="8" stroke-linecap="round"/>
+  <path d="M200 154v22M184 184h32" stroke="#7dd3fc" stroke-width="8" stroke-linecap="round"/>
+  <g stroke="#34d399" stroke-width="7" stroke-linecap="round" opacity="0.9">
+    <path d="M120 96v48"/><path d="M98 80v80"/><path d="M280 96v48"/><path d="M302 80v80"/>
+  </g>
+</svg>

@@ -1,0 +1,48 @@
+name: Deploy demo to GitHub Pages
+
+# Publishes the demo/ folder (live interactive demo + privacy policy + video)
+# to GitHub Pages. Enable Pages in Settings → Pages → "Build and deployment:
+# GitHub Actions" once, then every push to main redeploys.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Keep the demo's copy of the extension code in lockstep with extension/.
+      - name: Sync extension code into the demo
+        run: node scripts/sync-extension.mjs
+
+      - uses: actions/configure-pages@v5
+
+      - name: Upload demo as the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: demo
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
