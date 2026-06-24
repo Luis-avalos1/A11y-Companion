@@ -4,16 +4,10 @@
 (function () {
   'use strict';
 
-  // When the extension is published, set this to the Chrome Web Store URL and
-  // both "Add to Chrome" buttons will point at it.
+  // Not on the Chrome Web Store yet. When a listing exists, set this URL and add
+  // an "Add to Chrome" link wherever it belongs — for now the demo points people
+  // at the source and the guided tour instead of a non-existent store page.
   const STORE_URL = '';
-
-  if (STORE_URL) {
-    document.querySelectorAll('#cta-store, .newsletter button').forEach((el) => {
-      if (el.tagName === 'A') { el.href = STORE_URL; el.target = '_blank'; el.rel = 'noopener'; }
-      else el.addEventListener('click', () => window.open(STORE_URL, '_blank', 'noopener'));
-    });
-  }
 
   // ── One-tap presets: write straight to the shimmed chrome.storage.sync, the
   //    same store the toolbar reads. The content script reacts via onChanged. ──
@@ -33,11 +27,10 @@
     });
   });
 
-  // ── Guided tour trigger ──
-  const tourBtn = document.getElementById('play-tour');
-  if (tourBtn) {
-    tourBtn.addEventListener('click', () => window.A11yTour && window.A11yTour.start());
-  }
+  // ── Guided tour triggers (header CTA + the "Get A11y Companion" box) ──
+  document.querySelectorAll('#play-tour, #play-tour-2').forEach((btn) => {
+    btn.addEventListener('click', () => window.A11yTour && window.A11yTour.start());
+  });
 
   // Auto-start the tour when asked (used by the video recorder: ?tour=1).
   const params = new URLSearchParams(location.search);
@@ -61,9 +54,9 @@
       ok = results.some(Boolean);
       if (!ok) {
         frame.innerHTML =
-          '<div class="video-missing">🎬 The recorded tour will appear here.<br>' +
+          '<div class="video-missing">The recorded tour will appear here.<br>' +
           'Run <code>npm run record</code> to generate it, or press ' +
-          '<b>▶ Play the guided tour</b> above to watch it live.</div>';
+          '<b>▶ Play the 90-second tour</b> above to watch it live.</div>';
       }
     });
   }

@@ -11,6 +11,8 @@
     "screenshots": "node scripts/capture-screenshots.mjs",
     "zip": "node scripts/build-zip.mjs",
     "verify": "node scripts/verify-demo.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
+    "check": "npm run sync && npm test && npm run verify",
     "assets": "npm run sync && npm run verify && npm run record && npm run screenshots",
     "build": "npm run sync && npm run zip"
   },

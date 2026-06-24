@@ -27,32 +27,34 @@
           <span>Accessibility toolbar for any website</span>
         </div>
       </div>
-      <span class="pill"><span class="dot"></span> Live demo — running in your browser, nothing to install</span>
+      <span class="edition"><span class="mark" aria-hidden="true"></span> Live in your browser · Nothing to install</span>
     </div>
+    <hr class="masthead-rule">
+    <hr class="masthead-rule">
 
     <div class="demo-hero">
-      <h1>See an accessibility toolbar reshape a real web page — live.</h1>
-      <p>
-        Everything below is a normal article. The floating bar at the bottom of your
+      <p class="eyebrow">An interactive demonstration</p>
+      <h1>Watch an accessibility toolbar reshape a real web page.</h1>
+      <p class="standfirst">
+        Everything below is an ordinary article. The bar floating at the foot of your
         screen is the <b>actual</b> A11y Companion extension, running on this page through
-        a small shim. Resize text, switch on a dyslexia font, flip to dark or
-        high-contrast, turn on the reading ruler, have the page read aloud, and more —
-        no extension required.
+        a small shim. Resize the text, switch on a dyslexia typeface, flip to dark or
+        high contrast, turn on the reading ruler, have the page read aloud — no install,
+        no account, nothing to sign up for.
       </p>
       <div class="cta-row">
         <button class="btn btn-primary" id="play-tour" aria-label="Play the guided feature tour">
-          ▶ Play the 90-second guided tour
+          ▶ Play the 90-second tour
         </button>
-        <a class="btn btn-ghost" id="cta-store" href="#install" >Add to Chrome</a>
         <a class="btn btn-ghost" id="cta-github" href="https://github.com/Luis-avalos1/accessibility-plugin" target="_blank" rel="noopener">
           View source on GitHub
         </a>
       </div>
 
-      <div class="callout">
+      <p class="callout">
         <span class="arrow" aria-hidden="true">↓</span>
-        <span>Look at the bottom of the page — that floating bar is the live toolbar. Try the buttons, or hit <b>Play the guided tour</b>.</span>
-      </div>
+        <span>Look to the foot of the page — that floating bar is the live toolbar. Try its buttons, or play the guided tour.</span>
+      </p>
     </div>
   </div>
 </header>
@@ -90,8 +92,7 @@
         <div class="byline">
           <img class="avatar" src="assets/avatar.svg" alt="Portrait of columnist Rivka Mendez">
           <div>
-            By <b>Rivka Mendez</b> · 8 min read
-            <span class="live"> · <span class="blip" aria-hidden="true"></span>Updating live</span>
+            By <b>Rivka Mendez</b> · 8 min read · June 2026
           </div>
         </div>
 
@@ -100,7 +101,7 @@
           <figcaption>Roughly one in six people lives with a disability — and far more hit reading barriers every day.</figcaption>
         </figure>
 
-        <p>
+        <p class="lede">
           Open almost any website and you'll meet a wall of small, low-contrast, tightly
           packed text. For most people it's a mild annoyance. For someone with dyslexia,
           low vision, ADHD, color blindness, or simply tired, aging eyes, that same wall
@@ -148,7 +149,7 @@
           toolbar and watch the figure fade.
         </p>
 
-        <figure class="inline-figure" style="max-width:420px;margin-inline:auto;">
+        <figure class="inline-figure narrow">
           <img src="assets/colorblind-plate.svg" alt="An Ishihara color vision test plate; most people see the number five.">
           <figcaption>A color-vision plate. Try the color-blindness filters on the toolbar and watch the hidden number wash out.</figcaption>
         </figure>
@@ -158,7 +159,7 @@
           Point your mouse at any line and the <b>screen reader</b> speaks it aloud after a
           short pause. Press play and the whole article is <b>read aloud</b> in chunks with
           a moving highlight. Turn on <b>voice commands</b> and you can say "scroll down,"
-          "reading mode," or even "click add to chrome" — entirely hands-free.
+          "reading mode," or even "click view source" — entirely hands-free.
         </p>
 
         <table class="data">
@@ -189,13 +190,13 @@
           the bottom of this page — or take the guided tour.
         </p>
 
-        <div class="newsletter" id="install">
+        <div class="aboutbox" id="install">
           <h3>Get A11y Companion</h3>
-          <p>Install the real extension from the Chrome Web Store, or read the source. (This box is part of the demo — the email field does nothing.)</p>
-          <form onsubmit="return false;">
-            <input type="email" placeholder="you@example.com" aria-label="Email address (demo only)">
-            <button type="submit">Add to Chrome</button>
-          </form>
+          <p>It's free and open source. A Chrome Web Store listing is in the works; until then you can load the unpacked extension from the source, or take the guided tour to see everything it does.</p>
+          <div class="actions">
+            <button class="btn btn-primary" id="play-tour-2" aria-label="Play the guided feature tour">▶ Play the tour</button>
+            <a class="btn btn-ghost" href="https://github.com/Luis-avalos1/accessibility-plugin" target="_blank" rel="noopener">View source on GitHub</a>
+          </div>
         </div>
 
         <h3>Keep reading</h3>
@@ -221,7 +222,8 @@
 <!-- ───────────────── Demo video ───────────────── -->
 <section class="video-section" id="video">
   <div class="wrap">
-    <h2>Watch the 90-second feature tour</h2>
+    <p class="eyebrow">On the record</p>
+    <h2>The 90-second feature tour</h2>
     <p>The same guided tour you can run above, recorded end to end.</p>
     <div class="video-frame" id="video-frame">
       <video id="demo-video" controls playsinline preload="metadata" poster="assets/poster.png">

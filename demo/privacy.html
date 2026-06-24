@@ -7,25 +7,35 @@
   <meta name="description" content="A11y Companion does not collect, transmit, sell, or share any personal data. Everything happens locally in your browser.">
   <link rel="icon" href="assets/icon.svg">
   <style>
-    :root { --ink:#14181f; --muted:#5b6675; --brand:#1d4ed8; --line:#e4e8ef; }
+    /* Matches the demo's editorial broadsheet identity (see styles.css). */
+    :root {
+      --bg:#ece5d6; --paper:#faf6ee; --ink:#211b15; --muted:#655c4c; --faint:#6a6151;
+      --line:#d8cfba; --rule:#2a2319; --press:#a0352a; --press-dk:#7f2920; --radius:3px;
+      --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,"Times New Roman",serif;
+      --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    }
     * { box-sizing: border-box; }
-    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-           color:var(--ink); background:#f6f7f9; line-height:1.65; }
-    .top { background:linear-gradient(150deg,#0b1220,#0e2a4d); color:#fff; padding:34px 20px; }
-    .top .in { max-width:760px; margin:0 auto; display:flex; align-items:center; gap:14px; }
-    .top img { width:44px; height:44px; border-radius:10px; }
-    .top h1 { margin:0; font-size:24px; }
-    .top a { color:#aecbff; font-size:14px; }
-    main { max-width:760px; margin:0 auto; padding:32px 20px 80px; }
-    .updated { color:var(--muted); font-size:14px; margin:0 0 24px; }
-    h2 { font-size:20px; margin:32px 0 8px; }
+    body { margin:0; font-family:var(--sans); color:var(--ink); background:var(--bg); line-height:1.65;
+           background-image:repeating-linear-gradient(90deg,rgba(0,0,0,0.014) 0 1px,transparent 1px 3px); }
+    /* carry the index nameplate's double-rule across so it reads as one publication */
+    .top { position:relative; background:var(--bg); padding:24px 28px 0; border-bottom:3px solid var(--rule); }
+    .top::after { content:""; position:absolute; left:0; right:0; bottom:-5px; height:1px; background:var(--line); }
+    :focus-visible { outline:2px solid var(--press); outline-offset:2px; border-radius:1px; }
+    .top .in { max-width:760px; margin:0 auto; display:flex; align-items:center; gap:14px; padding-bottom:18px; }
+    .top img { width:40px; height:40px; border-radius:0; filter:grayscale(1) contrast(1.05); }
+    .top h1 { margin:0; font-family:var(--serif); font-size:26px; font-weight:700; letter-spacing:-0.01em; }
+    .top a { color:var(--press); font-size:13px; font-weight:600; }
+    main { max-width:760px; margin:0 auto; padding:36px 28px 80px; }
+    .updated { color:var(--faint); font-size:13px; margin:0 0 24px; text-transform:uppercase; letter-spacing:.08em; font-weight:600; }
+    h2 { font-family:var(--serif); font-size:22px; margin:36px 0 8px; letter-spacing:-0.01em; }
     p, li { font-size:16px; }
-    a { color:var(--brand); }
+    a { color:var(--press); text-underline-offset:2px; }
+    a:hover { color:var(--press-dk); }
     ul { padding-left:22px; }
-    .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:18px 22px; margin:18px 0; }
-    .lead { font-size:18px; }
-    code { background:#eef2f8; padding:1px 6px; border-radius:5px; font-size:14px; }
-    footer { max-width:760px; margin:0 auto; padding:0 20px 60px; color:var(--muted); font-size:14px; }
+    .card { background:var(--paper); border:1px solid var(--ink); border-radius:var(--radius); padding:18px 22px; margin:18px 0; }
+    .lead { font-family:var(--serif); font-size:19px; line-height:1.5; }
+    code { background:var(--paper); border:1px solid var(--line); padding:1px 6px; border-radius:var(--radius); font-size:14px; }
+    footer { max-width:760px; margin:0 auto; padding:18px 28px 60px; color:var(--muted); font-size:13px; border-top:1px solid var(--line); }
   </style>
 </head>
 <body>

@@ -9,6 +9,8 @@
   'use strict';
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const prefersReduced = () =>
+    typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   let running = false;
   let cancelled = false;
 
@@ -81,7 +83,9 @@
   }
 
   async function scrollTo(y) {
-    window.scrollTo({ top: y, behavior: cancelled ? 'auto' : 'smooth' });
+    // Honour reduced-motion: a JS smooth scroll overrides the CSS scroll-behavior,
+    // so gate it here too, or the marquee tour animates for vestibular-sensitive users.
+    window.scrollTo({ top: y, behavior: (cancelled || prefersReduced()) ? 'auto' : 'smooth' });
     await sleep(650);
   }
   function elTop(sel) {
@@ -200,7 +204,7 @@
     if (cancelled) return cleanup();
 
     // 13. Voice commands
-    say('Voice commands', 'Go hands-free: say “scroll down”, “reading mode”, or “click add to chrome”.');
+    say('Voice commands', 'Go hands-free: say “scroll down”, “reading mode”, or “click view source”.');
     click('#t-voiceInput'); await sleep(3000);
     ensureOff('#t-voiceInput'); await sleep(400);
     if (cancelled) return cleanup();
@@ -224,8 +228,8 @@
 
     // 17. Outro
     await scrollTo(0);
-    spotlight(document.getElementById('cta-store'));
-    say('Try it yourself', 'A11y Companion works on <b>every</b> website. Add it to Chrome, or explore the toolbar below.');
+    spotlight(document.getElementById('cta-github'));
+    say('Try it yourself', 'A11y Companion works on <b>every</b> website. It’s free and open source — explore the toolbar below, or read the source.');
     await sleep(4200);
     cleanup();
   }

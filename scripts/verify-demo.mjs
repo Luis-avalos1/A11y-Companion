@@ -58,13 +58,16 @@ try {
   if (fontUrl) { const r = await page.request.get(fontUrl); fontOk = r.ok(); }
   ok('OpenDyslexic-Regular.woff2 resolves & loads (200)', fontOk);
 
-  // Color: deuteranopia applies the SVG filter on <html>.
+  // Color: deuteranopia applies the SVG filter on <body> (not <html>, so the
+  // toolbar host — a child of <html> — is never tinted by the cascade).
   const deuter = await page.evaluate(() => {
     const tb = document.getElementById('__a11y-companion-host').shadowRoot;
     const s = tb.querySelector('#colorMode'); s.value = 'deuteranopia'; s.dispatchEvent(new Event('change', { bubbles: true }));
-    return getComputedStyle(document.documentElement).filter.includes('deuteranopia');
+    const host = document.getElementById('__a11y-companion-host');
+    return getComputedStyle(document.body).filter.includes('deuteranopia') &&
+      !getComputedStyle(host).filter.includes('deuteranopia');
   });
-  ok('deuteranopia applies an SVG color filter to <html>', deuter);
+  ok('deuteranopia filters <body> and leaves the toolbar host clean', deuter);
 
   // Reading mode marks the <main> and dims siblings.
   const reading = await page.evaluate(() => {

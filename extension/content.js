@@ -30,12 +30,17 @@
   function handleOrphan() {
     if (orphaned) return;
     orphaned = true;
-    try { observer && observer.disconnect(); } catch {}
+    try { attachObserver && attachObserver.disconnect(); } catch {}
+    try { featureObserver && featureObserver.disconnect(); } catch {}
     try { kbd.disable(); } catch {}
     try { voice.stop(); } catch {}
     try { screenReader.disableHover(); screenReader.stop(); } catch {}
     try { reader.stop(); } catch {}
     try { ruler.disable(); } catch {}
+    try { unwatchBaseFont(); } catch {}
+  }
+  function isContextError(err) {
+    return /context invalidated|Extension context/i.test(err?.message || String(err));
   }
 
   // ─── Storage helpers ────────────────────────────────────────────────
@@ -58,22 +63,118 @@
       ...(siteEntry && siteEntry.scoped ? siteEntry.overrides : null),
     };
   }
-  function saveSetting(key, value) {
-    settings[key] = value;
+
+  // Keys this tab just wrote, so its own echoed storage.onChanged events don't
+  // trigger a redundant full re-apply (the action already applied them).
+  const selfWrites = new Set();
+  function noteSelfWrite(keys) {
+    for (const k of keys) {
+      selfWrites.add(k);
+      // Self-heal: chrome.storage.sync.set does NOT emit onChanged when the
+      // value is byte-identical, so a no-op write (e.g. clamped font step, or
+      // reset while already at defaults) would leave this flag stuck and wrongly
+      // suppress a LATER external change to the same key. Drop it after a beat
+      // if the echo never arrives — same-tab echoes land in well under a second.
+      setTimeout(() => selfWrites.delete(k), 2000);
+    }
+  }
+  // chrome.storage write failed (quota/rate throttle) — don't let in-memory
+  // state silently diverge from storage; pull the authoritative copy and
+  // re-apply. Context-invalidation errors mean we've been orphaned.
+  function onWriteError(err) {
+    if (isContextError(err)) return handleOrphan();
+    console.warn('[a11y] settings write failed; resyncing:', err?.message || err);
+    if (extValid()) {
+      loadSettings().then(() => {
+        if (!siteDisabled) { applyAllStyles(); updateUI(); syncFeatureState(); }
+      });
+    }
+  }
+  function persistGlobal(patch) {
     if (!extValid()) return handleOrphan();
     try {
-      // Site-scoped mode routes everything except toolbar visibility (a
-      // global UX choice) into this host's override entry.
-      if (siteEntry?.scoped && key !== 'toolbarVisible') {
-        siteEntry.overrides = { ...siteEntry.overrides, [key]: value };
-        chrome.storage.sync.set({ [SITE_KEY]: siteEntry });
-      } else {
-        globalSettings[key] = value;
-        chrome.storage.sync.set({ [key]: value });
-      }
-    } catch {
-      handleOrphan();
+      noteSelfWrite(Object.keys(patch));
+      const p = chrome.storage.sync.set(patch);
+      if (p && p.catch) p.catch(onWriteError);
+    } catch (err) {
+      if (isContextError(err)) handleOrphan();
+      else onWriteError(err);
     }
+  }
+
+  // Scoped per-site writes are serialized and re-read storage before writing,
+  // so two writers (this tab, another tab, another device) changing different
+  // override keys don't clobber each other with a stale full snapshot.
+  let scopedWriteChain = Promise.resolve();
+  function persistScoped(overridePatch) {
+    scopedWriteChain = scopedWriteChain.then(async () => {
+      if (!extValid()) return;
+      let fresh;
+      try {
+        fresh = (await chrome.storage.sync.get(SITE_KEY))[SITE_KEY];
+      } catch (err) {
+        return isContextError(err) ? handleOrphan() : onWriteError(err);
+      }
+      if (!extValid()) return;
+      fresh = fresh || siteEntry || {};
+      fresh.overrides = { ...fresh.overrides, ...overridePatch };
+      siteEntry = fresh;
+      computeEffective();
+      try {
+        noteSelfWrite([SITE_KEY]);
+        await chrome.storage.sync.set({ [SITE_KEY]: fresh });
+      } catch (err) {
+        onWriteError(err);
+      }
+    });
+    return scopedWriteChain;
+  }
+
+  // Apply one or more settings at once. The in-memory effective value updates
+  // synchronously (instant UI); persistence is routed to the global keys or, in
+  // site-scoped mode, this host's override entry. Toolbar visibility is a global
+  // UX choice and always stays global.
+  function saveSettings(patch) {
+    Object.assign(settings, patch);
+    if (!extValid()) return handleOrphan();
+    const scoped = siteEntry && siteEntry.scoped;
+    const overridePatch = {};
+    const globalPatch = {};
+    for (const [k, v] of Object.entries(patch)) {
+      // Skip writes that wouldn't change storage — they save quota and, crucially,
+      // never produce an onChanged echo (so flagging them would leak; see
+      // noteSelfWrite).
+      if (scoped && k !== 'toolbarVisible') {
+        if (!siteEntry.overrides || siteEntry.overrides[k] !== v) overridePatch[k] = v;
+      } else if (globalSettings[k] !== v) {
+        globalSettings[k] = v;
+        globalPatch[k] = v;
+      }
+    }
+    if (Object.keys(globalPatch).length) persistGlobal(globalPatch);
+    if (Object.keys(overridePatch).length) persistScoped(overridePatch);
+  }
+  function saveSetting(key, value) {
+    saveSettings({ [key]: value });
+  }
+
+  // ─── Reduce-motion (manual setting OR the OS preference) ─────────────
+  let reduceMotionMQ = null;
+  function prefersReducedMotion() {
+    if (!reduceMotionMQ) {
+      try {
+        reduceMotionMQ = window.matchMedia('(prefers-reduced-motion: reduce)');
+        reduceMotionMQ.addEventListener?.('change', () => {
+          if (siteDisabled) return;
+          applyAllStyles();
+          syncFeatureState();
+        });
+      } catch { reduceMotionMQ = { matches: false }; }
+    }
+    return !!reduceMotionMQ.matches;
+  }
+  function effectiveReduceMotion() {
+    return !!settings.reduceMotion || prefersReducedMotion();
   }
 
   // ─── Style application (uses html element + !important to beat sites) ──
@@ -84,8 +185,37 @@
   document.getElementById(STYLE_ID)?.remove();
   // The site's own root font size, captured before we ever restyle. Scaling
   // multiplies this value instead of overwriting it, so sites using the
-  // `html { font-size: 62.5% }` rem pattern keep their layout.
-  const baseFontPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  // `html { font-size: 62.5% }` rem pattern keep their layout. Recomputed when
+  // the viewport changes (responsive root font-size) — see watchBaseFont.
+  let baseFontPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+
+  let baseFontResizeBound = null, baseFontResizeTimer = null;
+  function watchBaseFont() {
+    if (baseFontResizeBound) return;
+    baseFontResizeBound = () => {
+      clearTimeout(baseFontResizeTimer);
+      baseFontResizeTimer = setTimeout(() => {
+        if (orphaned || settings.fontSize === DEFAULTS.fontSize) return;
+        const styleEl = document.getElementById(STYLE_ID);
+        if (!styleEl) return;
+        // Measure the site's responsive root size with our override removed.
+        const prev = styleEl.textContent;
+        styleEl.textContent = '';
+        const measured = parseFloat(getComputedStyle(document.documentElement).fontSize) || baseFontPx;
+        styleEl.textContent = prev;
+        if (measured > 0 && Math.abs(measured - baseFontPx) > 0.5) {
+          baseFontPx = measured;
+          applyAllStyles();
+        }
+      }, 250);
+    };
+    window.addEventListener('resize', baseFontResizeBound, { passive: true });
+  }
+  function unwatchBaseFont() {
+    if (baseFontResizeBound) window.removeEventListener('resize', baseFontResizeBound);
+    baseFontResizeBound = null;
+    clearTimeout(baseFontResizeTimer);
+  }
 
   function applyAllStyles() {
     let styleEl = document.getElementById(STYLE_ID);
@@ -124,8 +254,11 @@
       (settings.lineHeight !== DEFAULTS.lineHeight
         ? ` line-height: ${settings.lineHeight} !important;`
         : '');
+    // Reset letter-spacing on icon/ligature fonts so spacing doesn't gap their
+    // glyphs (mirrors the dyslexia-font icon exclusion below).
     const spacing = spacingProps.trim()
-      ? `html, body, p, li, h1, h2, h3, h4, h5, h6, span, a, div, td, th, label, button, input, textarea { ${spacingProps} }`
+      ? `html, body, p, li, h1, h2, h3, h4, h5, h6, span, a, div, td, th, label, button, input, textarea { ${spacingProps} }
+         [class*="icon"], [class*="fa-"], i.fa, i.material-icons, .material-icons, [class*="glyph"] { letter-spacing: normal !important; }`
       : '';
     const dyslexia = settings.dyslexiaFont
       ? `html, body, p, li, h1, h2, h3, h4, h5, h6, span, a, div, td, th, label, button, input, textarea, blockquote, figcaption {
@@ -137,42 +270,40 @@
          }`
       : '';
 
+    // Color modes filter <body> (not <html>) so the cascade never reaches our
+    // toolbar host, which is a child of <html> and a sibling of <body>. A CSS
+    // filter cannot be undone by descendants, so html-scoped filters used to
+    // tint/invert the toolbar itself.
     let colorFilter = '';
     if (settings.colorMode === 'protanopia') {
-      colorFilter = `html { filter: url('#__a11y-protanopia') !important; }`;
+      colorFilter = `body { filter: url('#__a11y-protanopia') !important; }`;
     } else if (settings.colorMode === 'deuteranopia') {
-      colorFilter = `html { filter: url('#__a11y-deuteranopia') !important; }`;
+      colorFilter = `body { filter: url('#__a11y-deuteranopia') !important; }`;
     } else if (settings.colorMode === 'tritanopia') {
-      colorFilter = `html { filter: url('#__a11y-tritanopia') !important; }`;
+      colorFilter = `body { filter: url('#__a11y-tritanopia') !important; }`;
     } else if (settings.colorMode === 'invert') {
-      colorFilter = `html { filter: invert(1) hue-rotate(180deg) !important; }
+      // Mirror a dark backdrop onto <html> so short pages don't show an
+      // unfiltered (bright) gutter below the inverted body.
+      colorFilter = `html { background-color: #0a0a0a !important; }
+                     body { filter: invert(1) hue-rotate(180deg) !important; }
                      img, video, picture, [style*="background-image"] { filter: invert(1) hue-rotate(180deg) !important; }`;
     } else if (settings.colorMode === 'high-contrast') {
+      // Solid #000 on every element (not `transparent`) so layered backgrounds
+      // and floating menus/modals stay opaque and readable instead of letting
+      // page/image layers bleed through the white text. Low-specificity rules
+      // (no :not id padding) so the targeted link/control rules below win by
+      // source order. The toolbar host is outside <body>, so `body *` skips it.
       colorFilter = `
-        html, body { background: #000 !important; color: #fff !important; }
-        body *:not(#__a11y-companion-host):not(#__a11y-companion-host *) {
-          background-color: transparent !important;
-          color: #fff !important;
-          border-color: #fff !important;
+        html, body { background-color: #000 !important; color: #fff !important; }
+        body * { background-color: #000 !important; color: #fff !important; border-color: #fff !important; }
+        body a, body a * { color: #00ffff !important; }
+        body button, body input, body select, body textarea {
+          background-color: #222 !important; color: #fff !important; border: 1px solid #fff !important;
         }
-        /* Floating UI needs a solid surface back, or menus and modals turn
-           into unreadable text stacked over the page. */
-        dialog, [aria-modal="true"], [role="dialog"], [role="menu"], [role="listbox"],
-        [role="tooltip"], [class*="modal"], [class*="dropdown"], [class*="popover"],
-        [class*="menu"], [class*="tooltip"], .__a11y-hc-surface {
-          background-color: #000 !important;
-        }
-        a, a * { color: #00ffff !important; }
-        button:not(#__a11y-companion-host *),
-        input:not(#__a11y-companion-host *),
-        select:not(#__a11y-companion-host *),
-        textarea:not(#__a11y-companion-host *) {
-          background: #222 !important; color: #fff !important; border: 1px solid #fff !important;
-        }
-        img, video, svg { filter: brightness(0.85) contrast(1.1) !important; }
+        body img, body video, body svg { filter: brightness(0.85) contrast(1.1) !important; }
       `;
     } else if (settings.colorMode === 'grayscale') {
-      colorFilter = `html { filter: grayscale(1) !important; }`;
+      colorFilter = `body { filter: grayscale(1) !important; }`;
     }
 
     // Reading mode is applied imperatively (see applyReadingMode) so we only
@@ -198,8 +329,9 @@
       : '';
 
     // Freeze CSS animations/transitions without breaking sites that wait for
-    // animationend (near-zero duration instead of none).
-    const motion = settings.reduceMotion
+    // animationend (near-zero duration instead of none). Honors the OS
+    // prefers-reduced-motion preference in addition to the manual toggle.
+    const motion = effectiveReduceMotion()
       ? `*, *::before, *::after {
            animation-duration: 0.001s !important;
            animation-iteration-count: 1 !important;
@@ -208,51 +340,45 @@
          }`
       : '';
 
-    styleEl.textContent = fontFaces + fontSize + spacing + dyslexia + colorFilter + readingMode + motion;
+    const css = fontFaces + fontSize + spacing + dyslexia + colorFilter + readingMode + motion;
+    // Skip the re-parse + full-document style recalc when the CSS is unchanged
+    // (e.g. a non-visual setting changed, or our own storage echo re-ran this).
+    if (styleEl.textContent !== css) styleEl.textContent = css;
+
+    // Side effects reconcile live DOM state — always run them.
     ensureColorFilterSVG();
     applyReadingMode();
-    markHcSurfaces();
     pauseAutoplayMedia();
-  }
-
-  // Overlays (modals, dropdown portals) usually mount within a couple of
-  // levels of <body>; a computed-style pass that shallow stays cheap while
-  // catching the floating UI the CSS heuristics in high-contrast mode miss.
-  function markHcSurfaces() {
-    if (settings.colorMode !== 'high-contrast') {
-      document.querySelectorAll('.__a11y-hc-surface').forEach((el) =>
-        el.classList.remove('__a11y-hc-surface')
-      );
-      return;
-    }
-    for (const el of document.querySelectorAll('body > *, body > * > *')) {
-      if (el.id === '__a11y-companion-host' || el.id === '__a11y-color-filters') continue;
-      const pos = getComputedStyle(el).position;
-      if (pos === 'fixed' || pos === 'sticky' || pos === 'absolute') {
-        el.classList.add('__a11y-hc-surface');
-      }
-    }
+    if (settings.fontSize !== DEFAULTS.fontSize) watchBaseFont();
   }
 
   // Reading mode: find the main content element, then walk up to <body>,
   // dimming each sibling along the way. This works on nested layouts where
   // <main> isn't a direct child of <body> (most modern sites).
+  let readingApplied = false;
+  // Siblings that must stay interactive even when dimming the page: fixed/sticky
+  // chrome and dialogs (cookie walls, modals). Dimming them with
+  // pointer-events:none would trap the user.
+  const READING_KEEP = 'dialog, [aria-modal="true"], [role="dialog"], [role="alertdialog"]';
   function applyReadingMode() {
-    // Clean up any previous state first
-    document.querySelectorAll('.__a11y-reading-dim').forEach((el) =>
-      el.classList.remove('__a11y-reading-dim')
-    );
-    document.querySelectorAll('.__a11y-reading-main').forEach((el) =>
-      el.classList.remove('__a11y-reading-main')
-    );
-    if (!settings.readingMode) return;
+    // Only pay for the whole-document cleanup scans when reading mode is (or
+    // just was) active — users who never enable it shouldn't trigger them.
+    if (settings.readingMode || readingApplied) {
+      document.querySelectorAll('.__a11y-reading-dim').forEach((el) =>
+        el.classList.remove('__a11y-reading-dim')
+      );
+      document.querySelectorAll('.__a11y-reading-main').forEach((el) =>
+        el.classList.remove('__a11y-reading-main')
+      );
+    }
+    if (!settings.readingMode) { readingApplied = false; return; }
 
     const main =
       document.querySelector('main') ||
       document.querySelector('[role="main"]') ||
       document.querySelector('article') ||
       pickLargestTextBlock();
-    if (!main) return;
+    if (!main) { readingApplied = false; return; }
 
     main.classList.add('__a11y-reading-main');
 
@@ -261,37 +387,46 @@
     while (node && node.parentElement && node !== document.body) {
       const parent = node.parentElement;
       for (const sibling of parent.children) {
+        if (sibling === node) continue;
         if (
-          sibling !== node &&
-          sibling.id !== '__a11y-companion-host' &&
-          sibling.id !== '__a11y-color-filters' &&
-          sibling.id !== '__a11y-companion-ruler'
-        ) {
-          sibling.classList.add('__a11y-reading-dim');
-        }
+          sibling.id === '__a11y-companion-host' ||
+          sibling.id === '__a11y-color-filters' ||
+          sibling.id === '__a11y-companion-ruler'
+        ) continue;
+        // Never dim/disable fixed or sticky chrome or dialogs — that blocks
+        // cookie banners and modals the user needs to dismiss.
+        const pos = getComputedStyle(sibling).position;
+        if (pos === 'fixed' || pos === 'sticky') continue;
+        if (sibling.matches && sibling.matches(READING_KEEP)) continue;
+        sibling.classList.add('__a11y-reading-dim');
       }
       node = parent;
     }
+    readingApplied = true;
   }
 
   // Heuristic fallback: pick the element with the most direct text content.
+  // Uses textContent.length (no layout flush) as a cheap pre-filter, only
+  // gating on getClientRects() for the candidates that pass, and bails on
+  // pathological DOMs instead of reading innerText for every div/section.
   function pickLargestTextBlock() {
-    const candidates = document.querySelectorAll('div, section');
+    const candidates = document.querySelectorAll('div, section, article');
+    if (candidates.length > 6000) return null; // too big to scan safely
     let best = null;
-    let bestScore = 0;
+    let bestScore = 500; // require at least this many chars
     for (const el of candidates) {
-      const text = el.innerText || '';
-      const score = text.length;
-      if (score > bestScore && score > 500) {
-        bestScore = score;
-        best = el;
-      }
+      const len = (el.textContent || '').length;
+      if (len <= bestScore) continue;
+      if (!el.getClientRects().length) continue; // skip hidden/offscreen
+      bestScore = len;
+      best = el;
     }
     return best;
   }
 
   function ensureColorFilterSVG() {
     if (document.getElementById('__a11y-color-filters')) return;
+    if (!document.body && !document.documentElement) return;
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.id = '__a11y-color-filters';
     svg.setAttribute('aria-hidden', 'true');
@@ -314,14 +449,16 @@
     'TD', 'TH', 'DT', 'DD', 'CAPTION', 'SPAN', 'STRONG', 'EM', 'B', 'I',
     'CODE', 'PRE', 'LABEL', 'TIME', 'SMALL', 'A',
   ]);
-  // Pull the most meaningful label for the element under the pointer. Climbs to
-  // the nearest control/labelled ancestor so buttons read their name instead of
-  // an empty inner span, and skips giant containers so we don't read a whole
-  // section when the cursor is over a wrapper.
+  const READ_MAX = 300; // cap a single hover/label utterance
+  // Pull the most meaningful label for the element under the pointer. Prefers
+  // the element's OWN name/text before climbing to an ancestor landmark, so
+  // hovering text inside <section aria-label="Comments"> reads the text, not
+  // "Comments".
   function readableText(el) {
     if (!el || el.nodeType !== 1) return '';
 
-    // 1. Nearest interactive control → its accessible name.
+    // 1. Nearest interactive control → its accessible name. textContent (not
+    //    innerText) so visually-hidden labels on icon buttons are captured.
     const ctrl = el.closest(
       'a[href], button, [role="button"], [role="link"], [role="menuitem"], [role="tab"], input, select, textarea, summary'
     );
@@ -330,26 +467,29 @@
         ctrl.getAttribute('aria-label') ||
         ctrl.getAttribute('title') ||
         ctrl.value ||
-        ctrl.innerText ||
         ctrl.textContent
       );
-      if (name) return name.slice(0, 300);
+      if (name) return name.slice(0, READ_MAX);
     }
 
     // 2. Image → alt/label.
     if (el.tagName === 'IMG') return norm(el.alt || el.getAttribute('aria-label') || el.title);
 
-    // 3. Explicit label on the element or a close ancestor.
+    // 3. The element's OWN explicit label.
+    const ownLabel = norm((el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title'))) || '');
+    if (ownLabel) return ownLabel.slice(0, READ_MAX);
+
+    // 4. Text-level element → its text.
+    if (TEXT_TAGS.has(el.tagName)) return norm(el.innerText || el.textContent).slice(0, READ_MAX);
+
+    // 5. A close labelled ancestor (landmark, labelled wrapper).
     const labelled = el.closest('[aria-label], [title]');
     if (labelled) {
       const name = norm(labelled.getAttribute('aria-label') || labelled.getAttribute('title'));
-      if (name) return name.slice(0, 300);
+      if (name) return name.slice(0, READ_MAX);
     }
 
-    // 4. Text-level element → its text.
-    if (TEXT_TAGS.has(el.tagName)) return norm(el.innerText || el.textContent).slice(0, 800);
-
-    // 5. Generic container → only read if it's a short bit of text, else skip.
+    // 6. Generic container → only read if it's a short bit of text, else skip.
     const text = norm(el.innerText || el.textContent);
     return text.length <= 140 ? text : '';
   }
@@ -358,7 +498,7 @@
     synth: window.speechSynthesis,
     hoverBound: null,
     leaveBound: null,
-    lastEl: null,
+    lastText: null,
     hoverTimer: null,
     speak(text, opts = {}) {
       if (!text || !this.synth) return;
@@ -394,7 +534,7 @@
       this.hoverBound = this.onHover.bind(this);
       // Cancel any pending read when the pointer leaves the page or the tab
       // loses focus, so it doesn't blurt out a section after you've moved away.
-      this.leaveBound = () => { clearTimeout(this.hoverTimer); this.lastEl = null; };
+      this.leaveBound = () => { clearTimeout(this.hoverTimer); this.lastText = null; };
       document.addEventListener('mouseover', this.hoverBound, true);
       document.documentElement.addEventListener('mouseleave', this.leaveBound);
       window.addEventListener('blur', this.leaveBound);
@@ -409,7 +549,7 @@
       }
       this.hoverBound = null;
       this.leaveBound = null;
-      this.lastEl = null;
+      this.lastText = null;
       clearTimeout(this.hoverTimer);
       document.body?.classList.remove('__a11y-hover-read');
     },
@@ -417,12 +557,16 @@
       const el = e.target;
       // Over our own toolbar: cancel any pending read and bail.
       if (host && host.contains(el)) { clearTimeout(this.hoverTimer); return; }
-      if (!el || el === this.lastEl) return;
+      if (!el) return;
       clearTimeout(this.hoverTimer);
       this.hoverTimer = setTimeout(() => {
-        this.lastEl = el;
         const text = readableText(el);
-        if (text) this.speak(text);
+        // Dedupe by the resolved phrase, not node identity, so sweeping across
+        // child nodes that resolve to the same label doesn't stutter.
+        if (text && text !== this.lastText) {
+          this.lastText = text;
+          this.speak(text);
+        }
       }, settings.hoverDelay || 400);
     },
     stop() {
@@ -454,12 +598,14 @@
   }
 
   const READ_BLOCKS = 'p, h1, h2, h3, h4, h5, h6, li, blockquote, figcaption, dt, dd, pre, td, th';
+  const READ_BLOCK_CAP = 2000; // don't build an unbounded queue on huge docs
 
   const reader = {
     queue: [],
     idx: -1,
     active: false,
     paused: false,
+    endedWhilePaused: false,
     utter: null,
     hl: null,
     // Collect readable blocks from the main content area; fall back to
@@ -468,14 +614,18 @@
       const root =
         document.querySelector('main, [role="main"], article, #content, .content') ||
         document.body;
+      if (!root) return [];
       const blocks = [];
       for (const el of root.querySelectorAll(READ_BLOCKS)) {
         if (host?.contains(el)) continue;
         const anc = el.parentElement?.closest(READ_BLOCKS);
         if (anc && root.contains(anc)) continue; // an ancestor block already covers this text
         if (!el.getClientRects().length) continue;
-        const text = norm(el.innerText);
+        // textContent avoids the per-element forced reflow that innerText causes;
+        // getClientRects() above already filtered non-rendered blocks.
+        const text = norm(el.textContent);
         if (text) blocks.push({ el, text });
+        if (blocks.length >= READ_BLOCK_CAP) break;
       }
       if (blocks.length) {
         return blocks.flatMap((b) => splitChunks(b.text).map((text) => ({ el: b.el, text })));
@@ -492,6 +642,7 @@
       }
       this.active = true;
       this.paused = false;
+      this.endedWhilePaused = false;
       this.speakAt(0);
       updateReadUI();
     },
@@ -508,9 +659,13 @@
       if (v) u.voice = v;
       this.utter = u;
       // cancel() fires end/error for the in-flight utterance too — only the
-      // utterance that is still current may advance the queue.
+      // utterance that is still current may advance the queue. If a chunk ends
+      // while paused (some platforms let pause() finish the in-flight chunk),
+      // remember it so resume continues to the NEXT chunk instead of re-reading.
       const advance = () => {
-        if (this.utter === u && this.active && !this.paused) this.speakAt(this.idx + 1);
+        if (this.utter !== u) return;
+        if (this.paused) { this.endedWhilePaused = true; return; }
+        if (this.active) this.speakAt(this.idx + 1);
       };
       u.onend = advance;
       u.onerror = (e) => {
@@ -526,9 +681,11 @@
         try { screenReader.synth.pause(); } catch {}
       } else {
         this.paused = false;
-        // speaking stays true while paused mid-utterance; if the chunk ended
-        // right as we paused, restart it instead.
-        if (screenReader.synth.speaking) {
+        if (this.endedWhilePaused) {
+          // The chunk finished while paused — advance rather than re-read it.
+          this.endedWhilePaused = false;
+          this.speakAt(this.idx + 1);
+        } else if (screenReader.synth.speaking) {
           try { screenReader.synth.resume(); } catch {}
         } else {
           this.speakAt(this.idx);
@@ -539,6 +696,7 @@
     skip(dir) {
       if (!this.active) return;
       this.paused = false;
+      this.endedWhilePaused = false;
       try { screenReader.synth.resume(); } catch {}
       this.speakAt(this.idx + dir);
       updateReadUI();
@@ -547,6 +705,7 @@
       const wasActive = this.active;
       this.active = false;
       this.paused = false;
+      this.endedWhilePaused = false;
       this.utter = null;
       this.highlight(null);
       this.queue = [];
@@ -561,7 +720,7 @@
       if (el) {
         el.classList.add('__a11y-reading-now');
         try {
-          el.scrollIntoView({ block: 'center', behavior: settings.reduceMotion ? 'auto' : 'smooth' });
+          el.scrollIntoView({ block: 'center', behavior: effectiveReduceMotion() ? 'auto' : 'smooth' });
         } catch {}
       }
     },
@@ -574,6 +733,8 @@
     el: null,
     moveBound: null,
     leaveBound: null,
+    raf: 0,
+    lastY: null,
     sync() {
       if (settings.ruler && !siteDisabled) this.enable();
       else this.disable();
@@ -592,26 +753,38 @@
         'height: ' + h + 'px; pointer-events: none; z-index: 2147483646;' +
         'box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.42);' +
         'border-top: 1px solid rgba(255,255,255,0.35); border-bottom: 1px solid rgba(255,255,255,0.35);';
+      // Throttle to one position update per frame, and use the known band height
+      // instead of reading offsetHeight (a forced layout flush) every move.
+      const update = () => {
+        this.raf = 0;
+        if (!this.el || this.lastY == null) return;
+        this.el.style.top = (this.lastY - (settings.rulerHeight || 80) / 2) + 'px';
+      };
       this.moveBound = (e) => {
         if (!this.el) return;
         // Park the band offscreen while the pointer is over our own toolbar.
         if (host && (e.target === host || host.contains(e.target))) {
           this.el.style.top = '-9999px';
+          this.lastY = null;
           return;
         }
-        this.el.style.top = e.clientY - this.el.offsetHeight / 2 + 'px';
+        this.lastY = e.clientY;
+        if (!this.raf) this.raf = requestAnimationFrame(update);
       };
       this.leaveBound = () => {
         if (this.el) this.el.style.top = '-9999px';
+        this.lastY = null;
       };
       document.addEventListener('mousemove', this.moveBound, { passive: true });
       document.documentElement.addEventListener('mouseleave', this.leaveBound);
       document.documentElement.appendChild(this.el);
     },
     disable() {
+      if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; }
       if (this.moveBound) document.removeEventListener('mousemove', this.moveBound);
       if (this.leaveBound) document.documentElement.removeEventListener('mouseleave', this.leaveBound);
       this.moveBound = this.leaveBound = null;
+      this.lastY = null;
       this.el?.remove();
       this.el = null;
     },
@@ -623,17 +796,32 @@
   // worker. Inference runs locally — page text never leaves the device.
   const ai = {
     busy: false,
+    lastTrigger: null,
     showSheet(title, text) {
       if (!shadow) return;
       const sheet = shadow.querySelector('#sheet');
       if (!sheet) return;
+      // Remember what to return focus to when the sheet closes. In a shadow
+      // root document.activeElement is the host, so read shadow.activeElement.
+      if (sheet.classList.contains('hidden')) {
+        this.lastTrigger = shadow.activeElement || null;
+      }
       shadow.querySelector('#sheet-title').textContent = title;
       shadow.querySelector('#sheet-body').textContent = text;
       sheet.classList.remove('hidden');
       sheet.focus({ preventScroll: true });
     },
     hideSheet() {
-      shadow?.querySelector('#sheet')?.classList.add('hidden');
+      const sheet = shadow?.querySelector('#sheet');
+      if (!sheet || sheet.classList.contains('hidden')) return;
+      sheet.classList.add('hidden');
+      // Restore focus to the control that opened the sheet (fall back to the
+      // summarize button if that control is gone — e.g. opened by voice).
+      const back = this.lastTrigger && shadow?.contains(this.lastTrigger)
+        ? this.lastTrigger
+        : shadow?.querySelector('#ai-summary');
+      this.lastTrigger = null;
+      try { back?.focus({ preventScroll: true }); } catch {}
     },
     errorMessage(err) {
       if (err?.name === 'NotAllowedError') {
@@ -683,10 +871,12 @@
       }
     },
     async simplify(speakResult) {
+      if (this.busy) return;
       const sel = norm(String(window.getSelection?.().toString() || ''));
       if (!sel) {
         return this.showSheet('Plain language', 'Select some text first, then try simplify again.');
       }
+      this.busy = true;
       this.showSheet('Plain language', 'Rewriting in plain language…');
       try {
         const res = await chrome.runtime.sendMessage({ type: 'a11y-simplify', text: sel.slice(0, 4000) });
@@ -695,6 +885,8 @@
         if (speakResult && out) reader.start(out);
       } catch (err) {
         this.showSheet('Plain language', this.errorMessage(err));
+      } finally {
+        this.busy = false;
       }
     },
   };
@@ -712,7 +904,7 @@
   // we leave it alone.
   const motionPaused = new WeakSet();
   function pauseAutoplayMedia() {
-    if (!settings.reduceMotion) return;
+    if (!effectiveReduceMotion()) return;
     document.querySelectorAll('video[autoplay]').forEach((v) => {
       if (!v.paused && !motionPaused.has(v)) {
         motionPaused.add(v);
@@ -722,45 +914,65 @@
   }
 
   // ─── Keyboard navigation ────────────────────────────────────────────
+  function isVisible(el) {
+    return (
+      el.getClientRects().length > 0 &&
+      getComputedStyle(el).visibility !== 'hidden' &&
+      !host?.contains(el)
+    );
+  }
+  // Widgets that handle arrow keys themselves — we must not hijack them.
+  const ARROW_WIDGETS =
+    '[role="menu"], [role="menubar"], [role="listbox"], [role="grid"], [role="tree"], [role="treegrid"], [role="tablist"], [role="slider"], [role="spinbutton"], [contenteditable]';
   const kbd = {
     current: null,
     bound: null,
+    focusinBound: null,
+    mousedownBound: null,
     focusables() {
       return Array.from(
         document.querySelectorAll(
           'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
         )
-      ).filter(
-        // offsetParent is null for position:fixed elements (sticky navs, chat
-        // widgets), so visibility is checked via client rects instead.
-        (el) =>
-          el.getClientRects().length > 0 &&
-          getComputedStyle(el).visibility !== 'hidden' &&
-          !host?.contains(el)
-      );
+      ).filter(isVisible);
     },
     init() {
       if (this.bound) return;
       this.bound = this.onKey.bind(this);
       document.addEventListener('keydown', this.bound, true);
-      const els = this.focusables();
-      if (els.length) this.focus(els[0]);
+      // Keep our ring in sync with where focus really is: if the user clicks or
+      // tabs elsewhere, drop the stale ring instead of leaving it behind.
+      this.focusinBound = (e) => {
+        if (!this.current || e.target === this.current || host?.contains(e.target)) return;
+        this.current.classList.remove('__a11y-focused');
+        this.current = null;
+      };
+      this.mousedownBound = () => {
+        if (this.current) { this.current.classList.remove('__a11y-focused'); this.current = null; }
+      };
+      document.addEventListener('focusin', this.focusinBound, true);
+      document.addEventListener('mousedown', this.mousedownBound, true);
+      // Do NOT auto-focus the first control — that steals the site's own
+      // autofocus. We only move focus when the user issues a move command.
     },
     disable() {
       if (this.bound) document.removeEventListener('keydown', this.bound, true);
-      this.bound = null;
+      if (this.focusinBound) document.removeEventListener('focusin', this.focusinBound, true);
+      if (this.mousedownBound) document.removeEventListener('mousedown', this.mousedownBound, true);
+      this.bound = this.focusinBound = this.mousedownBound = null;
       if (this.current) this.current.classList.remove('__a11y-focused');
       this.current = null;
     },
     onKey(e) {
-      // Don't hijack typing inside form fields
-      const tag = (e.target?.tagName || '').toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-        e.preventDefault();
-      }
-      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') this.move(1);
-      else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') this.move(-1);
+      // Don't hijack typing inside form fields…
+      const t = e.target;
+      const tag = (t?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || t?.isContentEditable) return;
+      // …or arrow-driven ARIA widgets (menus, sliders, grids, tablists).
+      if (t?.closest && t.closest(ARROW_WIDGETS)) return;
+      // Only consume (and preventDefault) the keys we actually act on.
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); this.move(1); }
+      else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); this.move(-1); }
       else if (e.key === 'Enter' && this.current && !host?.contains(this.current)) this.current.click?.();
     },
     move(dir) {
@@ -776,7 +988,7 @@
       this.current = el;
       el.classList.add('__a11y-focused');
       try { el.focus({ preventScroll: true }); } catch {}
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.scrollIntoView({ behavior: effectiveReduceMotion() ? 'auto' : 'smooth', block: 'center' });
       if (settings.screenReader) screenReader.readEl(el);
     },
   };
@@ -799,6 +1011,9 @@
 
   // ─── Voice commands ─────────────────────────────────────────────────
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  function escapeRegex(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
   const voice = {
     rec: null,
     listening: false,
@@ -812,7 +1027,7 @@
       this.rec.lang = settings.voiceLang || 'en-US';
       this.rec.onresult = (e) => {
         const transcript = e.results[e.results.length - 1][0].transcript.trim().toLowerCase();
-        this.handle(transcript);
+        try { this.handle(transcript); } catch (err) { console.warn('[a11y] voice handler:', err); }
       };
       this.rec.onerror = (e) => {
         console.warn('[a11y] voice error:', e.error);
@@ -844,52 +1059,58 @@
       this.listening = false;
     },
     handle(t) {
-      console.log('[a11y] heard:', t);
       // "click <something>" — find a link/button whose text matches and click it
       const clickMatch = t.match(/^(?:click|press|tap|open) (.+)$/);
       if (clickMatch) return this.clickByText(clickMatch[1]);
 
-      // Whole-word matching so e.g. "unexpected" can't trigger "next"; the
-      // shortest commands additionally require the utterance to be exactly
-      // that word, since they occur inside too many ordinary sentences.
-      const cmd = (sub, fn) => new RegExp(`\\b${sub}\\b`).test(t) && (fn(), true);
-      const exact = (word, fn) => t === word && (fn(), true);
-      cmd('scroll down', () => window.scrollBy(0, 400)) ||
-      cmd('scroll up', () => window.scrollBy(0, -400)) ||
-      cmd('top of page', () => window.scrollTo(0, 0)) ||
-      cmd('bottom of page', () => window.scrollTo(0, document.body.scrollHeight)) ||
-      cmd('go back', () => history.back()) ||
-      cmd('go forward', () => history.forward()) ||
-      cmd('reload', () => location.reload()) ||
-      cmd('where am i', () => screenReader.readPageInfo()) ||
-      cmd('page info', () => screenReader.readPageInfo()) ||
-      cmd('read url', () => screenReader.readPageInfo()) ||
-      cmd('read page', () => reader.start()) ||
-      cmd('stop reading', () => { reader.stop(); screenReader.stop(); }) ||
-      cmd('next paragraph', () => reader.skip(1)) ||
-      cmd('previous paragraph', () => reader.skip(-1)) ||
-      cmd('pause', () => { if (reader.active && !reader.paused) reader.pauseToggle(); }) ||
-      cmd('resume', () => { if (reader.active && reader.paused) reader.pauseToggle(); }) ||
-      cmd('continue', () => { if (reader.active && reader.paused) reader.pauseToggle(); }) ||
-      cmd('summarize', () => ai.summarize(true)) ||
-      cmd('simplify', () => ai.simplify(true)) ||
-      cmd('bigger text', () => actions.fontSize(10)) ||
-      cmd('smaller text', () => actions.fontSize(-10)) ||
-      cmd('reading mode', () => actions.toggle('readingMode')) ||
-      cmd('ruler', () => actions.toggle('ruler')) ||
-      cmd('reduce motion', () => actions.toggle('reduceMotion')) ||
-      cmd('dark mode', () => actions.setColor('invert')) ||
-      cmd('high contrast', () => actions.setColor('high-contrast')) ||
-      cmd('default colors', () => actions.setColor('default')) ||
-      exact('next', () => kbd.move(1)) ||
-      exact('previous', () => kbd.move(-1));
+      // Commands must be the WHOLE utterance (after stripping a short leading
+      // filler), so words like "reload" or "go back" inside an ordinary
+      // sentence ("I need to reload my notes") can't fire a destructive action.
+      const u = t.replace(/^(please|okay|ok|hey|now|could you|can you)\s+/i, '').trim();
+      const phrase = (p, fn) => (u === p) && (fn(), true);
+      phrase('scroll down', () => window.scrollBy(0, 400)) ||
+      phrase('scroll up', () => window.scrollBy(0, -400)) ||
+      phrase('top of page', () => window.scrollTo(0, 0)) ||
+      phrase('top', () => window.scrollTo(0, 0)) ||
+      phrase('bottom of page', () => window.scrollTo(0, document.documentElement.scrollHeight)) ||
+      phrase('bottom', () => window.scrollTo(0, document.documentElement.scrollHeight)) ||
+      phrase('go back', () => history.back()) ||
+      phrase('go forward', () => history.forward()) ||
+      phrase('reload', () => location.reload()) ||
+      phrase('reload page', () => location.reload()) ||
+      phrase('where am i', () => screenReader.readPageInfo()) ||
+      phrase('page info', () => screenReader.readPageInfo()) ||
+      phrase('read url', () => screenReader.readPageInfo()) ||
+      phrase('read page', () => reader.start()) ||
+      phrase('stop reading', () => { reader.stop(); screenReader.stop(); }) ||
+      phrase('stop', () => { reader.stop(); screenReader.stop(); }) ||
+      phrase('next paragraph', () => reader.skip(1)) ||
+      phrase('previous paragraph', () => reader.skip(-1)) ||
+      phrase('pause', () => { if (reader.active && !reader.paused) reader.pauseToggle(); }) ||
+      phrase('resume', () => { if (reader.active && reader.paused) reader.pauseToggle(); }) ||
+      phrase('continue', () => { if (reader.active && reader.paused) reader.pauseToggle(); }) ||
+      phrase('summarize', () => ai.summarize(true)) ||
+      phrase('simplify', () => ai.simplify(true)) ||
+      phrase('bigger text', () => actions.fontSize(10)) ||
+      phrase('smaller text', () => actions.fontSize(-10)) ||
+      phrase('reading mode', () => actions.toggle('readingMode')) ||
+      phrase('ruler', () => actions.toggle('ruler')) ||
+      phrase('reduce motion', () => actions.toggle('reduceMotion')) ||
+      phrase('dark mode', () => actions.setColor('invert')) ||
+      phrase('high contrast', () => actions.setColor('high-contrast')) ||
+      phrase('default colors', () => actions.setColor('default')) ||
+      phrase('next', () => kbd.move(1)) ||
+      phrase('previous', () => kbd.move(-1));
     },
     clickByText(query) {
       const q = query.toLowerCase().trim();
+      if (!q) return;
       const candidates = document.querySelectorAll('a, button, [role="button"], [role="link"], input[type="submit"], input[type="button"]');
-      let best = null;
+      const wordRe = new RegExp(`\\b${escapeRegex(q)}\\b`);
+      let exactEl = null, wordEl = null, wordLen = Infinity, subEl = null, subLen = Infinity;
       for (const el of candidates) {
         if (host?.contains(el)) continue;
+        if (!isVisible(el)) continue; // don't "click" hidden/offscreen controls
         const label = (
           el.getAttribute('aria-label') ||
           el.innerText ||
@@ -898,11 +1119,14 @@
           ''
         ).toLowerCase().trim();
         if (!label) continue;
-        if (label === q) { best = el; break; }
-        if (!best && label.includes(q)) best = el;
+        if (label === q) { exactEl = el; break; }
+        // Prefer whole-word matches, then the shortest containing label.
+        if (wordRe.test(label) && label.length < wordLen) { wordEl = el; wordLen = label.length; }
+        else if (!wordEl && label.includes(q) && label.length < subLen) { subEl = el; subLen = label.length; }
       }
+      const best = exactEl || wordEl || subEl;
       if (best) {
-        best.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        best.scrollIntoView({ behavior: effectiveReduceMotion() ? 'auto' : 'smooth', block: 'center' });
         best.click();
       } else {
         screenReader.speak(`Could not find ${query}`, { lang: 'en-US' });
@@ -920,9 +1144,10 @@
     },
     spacing(delta) {
       // Round so stepping back down lands exactly on the defaults again
-      // (1.6 - 0.1 is not 1.5 in floating point).
-      saveSetting('letterSpacing', Math.round(Math.max(0, settings.letterSpacing + delta * 0.5) * 100) / 100);
-      saveSetting('lineHeight', Math.round(Math.max(1, settings.lineHeight + delta * 0.1) * 100) / 100);
+      // (1.6 - 0.1 is not 1.5 in floating point). Both keys persist in one write.
+      const letterSpacing = Math.round(Math.max(0, settings.letterSpacing + delta * 0.5) * 100) / 100;
+      const lineHeight = Math.round(Math.max(1, settings.lineHeight + delta * 0.1) * 100) / 100;
+      saveSettings({ letterSpacing, lineHeight });
       applyAllStyles();
     },
     toggle(key) {
@@ -933,10 +1158,27 @@
     },
     setColor(mode) {
       saveSetting('colorMode', mode);
+      syncFeatureState();
       applyAllStyles();
     },
     reset() {
-      Object.entries(DEFAULTS).forEach(([k, v]) => saveSetting(k, v));
+      // One batched write per storage namespace instead of ~18 separate writes.
+      const base = { ...DEFAULTS };
+      if (siteEntry && siteEntry.scoped) {
+        const overrides = { ...DEFAULTS };
+        delete overrides.toolbarVisible; // visibility stays global
+        siteEntry.overrides = overrides;
+        globalSettings.toolbarVisible = DEFAULTS.toolbarVisible;
+        Object.assign(settings, DEFAULTS);
+        computeEffective();
+        persistGlobal({ toolbarVisible: DEFAULTS.toolbarVisible });
+        persistScoped(overrides);
+      } else {
+        globalSettings = { ...DEFAULTS };
+        Object.assign(settings, DEFAULTS);
+        computeEffective();
+        persistGlobal(base);
+      }
       syncFeatureState();
       reader.stop();
       screenReader.stop();
@@ -959,6 +1201,7 @@
       screenReader.stop();
     }
     ruler.sync();
+    syncFeatureObserver();
   }
 
   // ─── Toolbar UI (Shadow DOM, isolated from page CSS) ────────────────
@@ -1079,7 +1322,7 @@
         /* !important so it also beats button.chip's higher specificity */
         .hidden { display: none !important; }
       </style>
-      <div class="panel" id="panel" role="toolbar" aria-label="A11y Companion">
+      <div class="panel" id="panel" role="group" aria-label="A11y Companion accessibility toolbar">
         <span class="brand" title="A11y Companion">♿</span>
 
         <div class="group" aria-label="Text size">
@@ -1151,7 +1394,7 @@
         <button class="reset" id="reset" title="Reset all" aria-label="Reset all settings">↺</button>
         <button class="close" id="close" title="Hide toolbar" aria-label="Hide toolbar">×</button>
       </div>
-      <div class="sheet hidden" id="sheet" role="dialog" aria-label="A11y Companion result" tabindex="-1">
+      <div class="sheet hidden" id="sheet" role="dialog" aria-modal="true" aria-label="A11y Companion result" tabindex="-1">
         <div class="sheet-head">
           <strong id="sheet-title">Summary</strong>
           <button class="chip label" id="sheet-speak" title="Read result aloud" aria-label="Read result aloud">🔊</button>
@@ -1195,8 +1438,22 @@
       const text = $('#sheet-body').textContent;
       if (text) reader.start(text);
     };
+    // Modal sheet: Escape closes; Tab/Shift+Tab is trapped among its controls.
     $('#sheet').addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') ai.hideSheet();
+      if (e.key === 'Escape') { ai.hideSheet(); return; }
+      if (e.key !== 'Tab') return;
+      const focusables = [$('#sheet-speak'), $('#sheet-close')].filter(
+        (el) => el && !el.classList.contains('hidden') && !el.disabled
+      );
+      if (!focusables.length) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = shadow.activeElement;
+      if (e.shiftKey && (active === first || active === $('#sheet'))) {
+        e.preventDefault(); last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault(); first.focus();
+      }
     });
 
     $('#colorMode').onchange = (e) => actions.setColor(e.target.value);
@@ -1220,7 +1477,9 @@
     const $ = (s) => shadow.querySelector(s);
     const play = $('#read-play');
     if (!play) return;
-    play.setAttribute('aria-pressed', String(reader.active));
+    // A toggle button with a changing accessible name should NOT also carry
+    // aria-pressed (AT would announce "Stop reading, pressed") — the name
+    // alone conveys state.
     play.setAttribute('aria-label', reader.active ? 'Stop reading' : 'Read page aloud');
     play.title = reader.active ? 'Stop reading' : 'Read page aloud';
     $('#read-play-ico').textContent = reader.active ? '⏹' : '▶';
@@ -1257,13 +1516,16 @@
       screenReader.stop();
       reader.stop();
       ruler.disable();
+      unwatchBaseFont();
+      syncFeatureObserver();
       document.getElementById(STYLE_ID)?.remove();
       document.getElementById(HELPER_STYLE_ID)?.remove();
       document
-        .querySelectorAll('.__a11y-hc-surface, .__a11y-reading-dim, .__a11y-reading-main, .__a11y-focused')
+        .querySelectorAll('.__a11y-reading-dim, .__a11y-reading-main, .__a11y-focused, .__a11y-reading-now')
         .forEach((el) =>
-          el.classList.remove('__a11y-hc-surface', '__a11y-reading-dim', '__a11y-reading-main', '__a11y-focused')
+          el.classList.remove('__a11y-reading-dim', '__a11y-reading-main', '__a11y-focused', '__a11y-reading-now')
         );
+      readingApplied = false;
       host?.remove();
       host = null;
       shadow = null;
@@ -1278,67 +1540,114 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'sync') return;
     let touched = false;
+    let external = false; // a change that did NOT originate from this tab
     for (const [k, c] of Object.entries(changes)) {
+      const isSelf = selfWrites.delete(k);
       if (k === SITE_KEY) {
         siteEntry = c.newValue || null;
         touched = true;
+        if (!isSelf) external = true;
       } else if (STORAGE_KEYS.includes(k)) {
         if (c.newValue === undefined) delete globalSettings[k];
         else globalSettings[k] = c.newValue;
         touched = true;
+        if (!isSelf) external = true;
       }
     }
     if (!touched) return;
     computeEffective();
     applyEnabledState();
     if (siteDisabled) return;
+    // Our own echoed writes were already applied by the action that made them —
+    // just refresh the chips. Only external changes (popup, options, other
+    // devices) need the full re-apply.
+    if (!external) { if (shadow) updateUI(); return; }
     buildToolbar(); // first enable on a tab that loaded while disabled
     applyAllStyles();
     updateUI();
     syncFeatureState();
   });
 
-  // SPA support:
-  // 1. Re-inject toolbar if removed by client routing
-  // 2. Re-apply reading mode on DOM mutations (debounced)
-  // 3. Re-apply on URL change (history pushState/replaceState)
-  let readingDebounce, hcDebounce, motionDebounce;
-  const observer = new MutationObserver(() => {
-    if (siteDisabled) return;
-    if (host && !document.documentElement.contains(host)) {
-      document.documentElement.appendChild(host);
-    }
+  // ─── SPA support ─────────────────────────────────────────────────────
+  // 1. A cheap, always-on observer keeps the toolbar + ruler attached. The host
+  //    and ruler are direct children of <html>, so childList (no subtree) on
+  //    documentElement is enough to notice their removal — far less work than a
+  //    subtree observer on never-idle SPAs (Docs, Figma, Gmail).
+  let hostReattachStart = 0, hostReattachCount = 0, hostGiveUpUntil = 0;
+  function reattachHost() {
+    const now = performance.now();
+    if (now < hostGiveUpUntil) return;
+    if (now - hostReattachStart > 3000) { hostReattachStart = now; hostReattachCount = 0; }
+    if (++hostReattachCount > 30) { hostGiveUpUntil = now + 5000; return; } // hostile page back-off
+    // Disconnect around our own append so it doesn't enqueue a no-op callback.
+    attachObserver.disconnect();
+    document.documentElement.appendChild(host);
+    attachObserver.observe(document.documentElement, { childList: true });
+  }
+  const attachObserver = new MutationObserver(() => {
+    if (siteDisabled || orphaned) return;
+    if (host && !document.documentElement.contains(host)) reattachHost();
     if (ruler.el && !document.documentElement.contains(ruler.el)) {
       document.documentElement.appendChild(ruler.el);
     }
+    if (location.href !== lastHref) fireUrlChange();
+  });
+  attachObserver.observe(document.documentElement, { childList: true });
+
+  // 2. A feature observer (subtree) re-applies reading mode / pauses autoplay as
+  //    SPA content swaps in. It's connected ONLY while a feature that needs it
+  //    is active, and skips batches with no element add/remove.
+  let readingDebounce, motionDebounce, featureObserverOn = false;
+  const featureObserver = new MutationObserver((mutations) => {
+    if (siteDisabled || orphaned) return;
+    let elementChange = false;
+    for (const m of mutations) {
+      if (m.addedNodes.length || m.removedNodes.length) { elementChange = true; break; }
+    }
+    if (!elementChange) return;
+    if (location.href !== lastHref) fireUrlChange();
     if (settings.readingMode) {
       clearTimeout(readingDebounce);
       readingDebounce = setTimeout(applyReadingMode, 400);
     }
-    if (settings.colorMode === 'high-contrast') {
-      clearTimeout(hcDebounce);
-      hcDebounce = setTimeout(markHcSurfaces, 400);
-    }
-    if (settings.reduceMotion) {
+    if (effectiveReduceMotion()) {
       clearTimeout(motionDebounce);
       motionDebounce = setTimeout(pauseAutoplayMedia, 400);
     }
   });
-  observer.observe(document.documentElement, { childList: true, subtree: true });
+  function syncFeatureObserver() {
+    const need = !siteDisabled && !orphaned && (settings.readingMode || effectiveReduceMotion());
+    if (need && !featureObserverOn) {
+      featureObserver.observe(document.documentElement, { childList: true, subtree: true });
+      featureObserverOn = true;
+    } else if (!need && featureObserverOn) {
+      featureObserver.disconnect();
+      featureObserverOn = false;
+    }
+  }
 
-  // Patch history APIs to detect SPA navigation
+  // 3. SPA navigation detection. The content script runs in an isolated world,
+  //    so patching history.pushState here does NOT see the page's own calls.
+  //    The Navigation API's currententrychange + hashchange + popstate ARE
+  //    cross-world, so they reliably catch route changes; the observer href
+  //    check above is a final backstop. (The history patch is kept only as a
+  //    harmless same-world fallback.)
   let lastHref = location.href;
   const fireUrlChange = () => {
+    if (orphaned) return; // stale closures must not run after an extension reload
     // Many sites call replaceState for scroll/analytics state without
     // navigating — only react when the URL really changed.
     if (location.href === lastHref) return;
     lastHref = location.href;
     reader.stop(); // the content under the reading queue is changing
     setTimeout(() => {
+      if (orphaned || siteDisabled) return;
       if (settings.readingMode) applyReadingMode();
-      if (settings.keyboardNav) {
-        const els = kbd.focusables();
-        if (els.length && !els.includes(kbd.current)) kbd.focus(els[0]);
+      // Don't steal focus on navigation; just drop a stale ring if its element
+      // is gone, so the next user move starts cleanly.
+      if (kbd.current && !document.documentElement.contains(kbd.current)) {
+        kbd.current.classList.remove('__a11y-focused');
+        kbd.current = null;
       }
     }, 500);
   };
@@ -1351,10 +1660,29 @@
     };
   });
   window.addEventListener('popstate', fireUrlChange);
+  window.addEventListener('hashchange', fireUrlChange);
+  if (window.navigation && window.navigation.addEventListener) {
+    try { window.navigation.addEventListener('currententrychange', fireUrlChange); } catch {}
+  }
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init, { once: true });
   } else {
     init();
+  }
+
+  // Test seam — unreachable from real web pages. In the packaged extension the
+  // content script runs in an isolated world, so this window assignment is
+  // invisible to page scripts; it is only reachable in same-world test contexts
+  // (the harness loads the script directly and sets <html data-a11y-test="1">).
+  // Exposes pure/DOM-acting helpers only — no settings mutation.
+  if (document.documentElement.getAttribute('data-a11y-test') === '1') {
+    window.__a11yTest = {
+      readableText,
+      splitChunks,
+      pickLargestTextBlock,
+      voiceHandle: (t) => voice.handle(t),
+      clickByText: (q) => voice.clickByText(q),
+    };
   }
 })();
